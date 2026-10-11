@@ -76,6 +76,17 @@ Step "Publishing self-contained win-x64 build (v$relVersion)"
 dotnet publish AutoCommand.csproj -c Release -r win-x64 --self-contained true -o "publish/v$relVersion"
 Assert-Exit 'dotnet publish'
 
+# Standalone capture engine — separate release asset. The app itself links
+# SvchostAnalyzer.Core and runs captures in-process (no bundled child exe
+# for SmartScreen to block); this exe is the headless/boot-autostart host.
+Step "Publishing SvchostAnalyzer CLI (standalone asset)"
+if (-not (Test-Path '..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj')) {
+    Die 'svchost-watch checkout not found next to autocommand1004 - required for the SvchostAnalyzer asset'
+}
+$analyzerDir = "publish/analyzer-v$relVersion"
+dotnet publish '..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj' -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $analyzerDir
+Assert-Exit 'dotnet publish analyzer'
+
 # -- Verify the binary carries the csproj version - the whole point -----------
 $exe = "publish/v$relVersion/AutoCommand.exe"
 $binaryVersion = (Get-Item $exe).VersionInfo.ProductVersion
@@ -88,7 +99,7 @@ Step "Verified exe ProductVersion: $binaryVersion"
 Step "Zipping release assets"
 foreach ($z in @($appZip, $anaZip)) { if (Test-Path $z) { Remove-Item $z } }
 Compress-Archive -Path "publish/v$relVersion/*" -DestinationPath $appZip
-Compress-Archive -Path "publish/v$relVersion/tools/SvchostAnalyzer.exe" -DestinationPath $anaZip
+Compress-Archive -Path "publish/analyzer-v$relVersion/SvchostAnalyzer.exe" -DestinationPath $anaZip
 
 $sums = @(
     "{0}  {1}" -f (Get-FileHash $appZip -Algorithm SHA256).Hash.ToLower(), (Split-Path $appZip -Leaf)

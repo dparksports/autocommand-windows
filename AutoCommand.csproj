@@ -25,6 +25,11 @@
 
   <ItemGroup>
     <ProjectReference Include="Sdk\AutoCommand.Sdk.csproj" />
+    <!-- The svchost capture/analysis engine, linked in-process: the app runs
+         it directly instead of spawning a bundled child exe (which SmartScreen
+         hard-blocks on download extracts). The standalone CLI exe remains a
+         separate release asset for headless/boot-autostart use. -->
+    <ProjectReference Include="..\svchost-watch\SvchostAnalyzer.Core\SvchostAnalyzer.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -81,16 +86,10 @@
     </ItemGroup>
   </Target>
 
-  <!-- Ship the Svchost Trace capture engine inside the app: published as a
-       self-contained single exe into tools\ next to AutoCommand.exe.
-       Skips silently when the sibling svchost-watch checkout is absent
-       (e.g. source builds without it) — the app then offers to download the
-       engine from the matching GitHub release instead. -->
-  <Target Name="PublishCaptureTool" AfterTargets="Publish"
-          Condition="Exists('..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj')">
-    <Message Importance="high" Text="Publishing SvchostAnalyzer capture engine -> $(PublishDir)tools" />
-    <Exec Command="dotnet publish ..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj -c $(Configuration) -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o &quot;$(PublishDir)tools&quot;" />
-  </Target>
+  <!-- The Svchost Trace capture engine no longer ships inside the app zip:
+       AutoCommand links SvchostAnalyzer.Core directly and runs captures
+       in-process. The standalone SvchostAnalyzer.exe (headless/boot-autostart
+       host) is a separate release asset built by release.ps1. -->
 
 </Project>
 

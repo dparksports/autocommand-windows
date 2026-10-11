@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using SvchostAnalyzer.Core;
 
 namespace AutoCommand.Views
 {
@@ -459,12 +460,19 @@ namespace AutoCommand.Views
             TraceStatusText.Text = $"Exported {_jsonEvents.Count} events → {dlg.FileName} (compatible with analyze-svchost.ps1)";
         }
 
-        // ── capture service management (headless SvchostAnalyzer lifecycle) ──
+        // ── capture service management ──────────────────────────────────────
         //
-        // The headless collector is the service-mode counterpart of this tab:
-        // survives app close, auto-starts at logon via a per-user LIMITED
-        // scheduled task, stops gracefully through a sentinel file. A killed
-        // trace is still valid JSONL (every event is its own appended line).
+        // Interactive captures run IN-PROCESS through SvchostAnalyzer.Core
+        // (the same engine the CLI exe wraps) — no child binary is spawned,
+        // so nothing for SmartScreen/Smart App Control to block. They end
+        // when the app closes.
+        //
+        // The headless SvchostAnalyzer.exe remains the opt-in boot-autostart
+        // host (survives app close, starts at logon via an HKCU Run key,
+        // stops through the sentinel file) for 24/7 recording; it is NOT
+        // bundled with the app anymore — enabling autostart offers the
+        // SHA-256-verified install from the GitHub release. A killed trace
+        // is still valid JSONL (every event is its own appended line).
 
         // Boot auto-start uses an HKCU Run key rather than a scheduled task:
         // task creation is elevation-gated for standard users (schtasks caps
@@ -483,6 +491,13 @@ namespace AutoCommand.Views
         private static readonly string ToolsDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AutoCommand", "tools");
+
+        /// <summary>
+        /// The in-process capture engine. Static: the capture outlives tab
+        /// unload/reload within the app session (matching the old exe's
+        /// independence from this view's lifetime).
+        /// </summary>
+        private static CaptureEngine _captureEngine;
 
         private static string ResolveAnalyzerExe()
         {
@@ -609,34 +624,59 @@ namespace AutoCommand.Views
             return null;
         }
 
-        private async void StartCaptureBtn_Click(object sender, RoutedEventArgs e)
+        private void StartCaptureBtn_Click(object sender, RoutedEventArgs e)
         {
-            var exe = ResolveAnalyzerExe();
-            if (exe == null)
+            if (_captureEngine is { IsRunning: true })
             {
-                var choice = MessageBox.Show(
-                    "The capture engine (SvchostAnalyzer.exe) is not installed on this machine.\n\n" +
-                    "Download and install it automatically?\n" +
-                    "  · Source: official AutoCommand release, matched to this app version\n" +
-                    "  · Integrity: SHA-256 verified against the published checksum\n" +
-                    $"  · Location: {ToolsDir}\n\n" +
-                    "Yes = download and install now · No = cancel",
-                    "Install capture engine", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (choice != MessageBoxResult.Yes) return;
-                exe = await DownloadCaptureToolAsync();
-                if (exe == null) return;
+                MessageBox.Show("An in-app capture is already running.", "Capture");
+                return;
             }
-            if (GetCaptureProcess() != null) { MessageBox.Show("A capture is already running.", "Capture"); return; }
+            if (GetCaptureProcess() != null)
+            {
+                MessageBox.Show("The standalone capture engine (boot auto-start) is already recording.", "Capture");
+                return;
+            }
+
             Directory.CreateDirectory(CapturesDir);
-            var outFile = Path.Combine(CapturesDir, $"svchost-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl");
-            Process.Start(new ProcessStartInfo(exe,
-                $"capture --seconds 0 --max-size-mb 200 --out \"{outFile}\" --stop-file \"{StopFilePath}\"")
-            { CreateNoWindow = true, UseShellExecute = false });
+            var engine = new CaptureEngine(new CaptureOptions
+            {
+                OutFile = Path.Combine(CapturesDir, $"svchost-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl"),
+                Duration = null,               // run until Stop
+                MaxSizeMb = 200,
+                StopFile = StopFilePath,       // the app's own stop protocol still works
+            });
+            engine.Status += m => Dispatcher.Invoke(() => TraceStatusText.Text = m);
+            engine.Completed += f => Dispatcher.Invoke(() =>
+            {
+                TraceStatusText.Text = $"Capture complete: {Path.GetFileName(f)}";
+                _ = RefreshServiceStatusAsync();
+            });
+            try
+            {
+                engine.Start();
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(ex.Message, "Capture", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            _captureEngine = engine;
+            TraceStatusText.Text = "In-process capture running — events stream to the captures folder.";
             _ = RefreshServiceStatusAsync();
         }
 
         private async void StopCaptureBtn_Click(object sender, RoutedEventArgs e)
         {
+            if (_captureEngine is { IsRunning: true })
+            {
+                TraceStatusText.Text = "Stopping in-process capture…";
+                var engine = _captureEngine;
+                await Task.Run(() => engine.Stop());
+                TraceStatusText.Text = "Capture stopped.";
+                _ = RefreshServiceStatusAsync();
+                return;
+            }
+
             var p = GetCaptureProcess();
             if (p == null) { MessageBox.Show("No capture is running.", "Capture"); return; }
             Directory.CreateDirectory(CapturesDir);
@@ -688,7 +728,9 @@ namespace AutoCommand.Views
 
         private async Task RefreshServiceStatusAsync()
         {
-            bool running = await Task.Run(() => GetCaptureProcess() != null);
+            bool inProc = _captureEngine is { IsRunning: true };
+            bool external = await Task.Run(() => GetCaptureProcess() != null);
+            bool running = inProc || external;
             bool autoOn = await Task.Run(() => { try { return IsAutoStartEnabled(); } catch { return false; } });
             CaptureDot.Fill = new System.Windows.Media.SolidColorBrush(
                 (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(
@@ -720,24 +762,13 @@ namespace AutoCommand.Views
 
         private async void AnalyzeFileBtn_Click(object sender, RoutedEventArgs e)
         {
-            var exe = ResolveAnalyzerExe();
-            if (exe == null) { MessageBox.Show("SvchostAnalyzer.exe not found.", "Analyze"); return; }
             if (TracesCombo.SelectedItem is not string file) { MessageBox.Show("Select a trace file first.", "Analyze"); return; }
             AnalyzeFileBtn.IsEnabled = false;
             try
             {
-                var psi = new ProcessStartInfo(exe, $"analyze \"{file}\"")
-                {
-                    CreateNoWindow = true, UseShellExecute = false,
-                    RedirectStandardOutput = true, RedirectStandardError = true
-                };
-                AnalysisBox.Text = await Task.Run(() =>
-                {
-                    using var p = Process.Start(psi);
-                    string text = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-                    p.WaitForExit(60000);
-                    return text;
-                });
+                // In-process: the engine is linked in, no exe to spawn
+                var result = await Task.Run(() => TraceAnalyzer.Analyze(new[] { file }));
+                AnalysisBox.Text = result.Report;
             }
             catch (Exception ex) { AnalysisBox.Text = "analysis failed: " + ex.Message; }
             finally { AnalyzeFileBtn.IsEnabled = true; }
