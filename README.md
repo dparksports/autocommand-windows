@@ -40,7 +40,7 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 | ❄ **Update Control** | Freeze self-updating apps at the version that works — `icacls` snapshots make unfreezing exact. Windows binaries are refused. |
 | 📋 **Tasks · 🚀 Startup · 🌙 Hibernation · 🌐 Connections** | Full Task Scheduler control, startup entries, hibernation posture, and a second live connection view. |
 | 🔒 **OS Hardening + ✅ DBX Safety** | Self-healing guards on SSTP/kernel-debug, the Secure Boot chain hashed and watched, DBX revocations applied only with your yes. |
-| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, analytics opt-in, live version — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
+| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, analytics opt-in, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
 
 ![Quick Scan — one guided pass](Assets/corp_debloat.png?v=fluent1)
 

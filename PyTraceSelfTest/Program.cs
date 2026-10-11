@@ -190,7 +190,7 @@ namespace PyTraceSelfTest
             Console.OutputEncoding = Encoding.UTF8;
             if (args.Length == 0)
             {
-                Console.WriteLine("usage: reassemble | tls <client.bin> <server.bin> <keylog-dir> | sweep12 <client.bin> <server.bin> <keylog-dir>");
+                Console.WriteLine("usage: reassemble | unblock [dir] | discover [keylog-dir] | sweep12 <client.bin> <server.bin> <keylog-dir> | tls <client.bin> <server.bin> <keylog-dir>");
                 return 2;
             }
             return args[0] switch
@@ -198,8 +198,69 @@ namespace PyTraceSelfTest
                 "reassemble" => TestReassembly(),
                 "sweep12" => DebugSweep12(args),
                 "discover" => Discover(args),
+                "unblock" => TestUnblock(args),
                 _ => TestTlsDecrypt(args)
             };
+        }
+
+        // -----------------------------------------------------------------------
+        // MotwUnblocker — verified against synthetic Zone.Identifier marks:
+        // powershell creates two marked files, the helper strips them, and a
+        // Get-Item -Stream re-check confirms none remain.
+        // -----------------------------------------------------------------------
+
+        private static int TestUnblock(string[] args)
+        {
+            string dir = args.Length > 1
+                ? args[1]
+                : Path.Combine(Path.GetTempPath(), "unblock-cs-test");
+            string app = Path.Combine(dir, "fakeapp");
+            try
+            {
+                if (Directory.Exists(app)) Directory.Delete(app, true);
+                Directory.CreateDirectory(Path.Combine(app, "sub"));
+                File.WriteAllText(Path.Combine(app, "AutoCommand.exe"), "exe-content");
+                File.WriteAllText(Path.Combine(app, "sub", "lib.dll"), "dll-content");
+                File.WriteAllText(Path.Combine(app, "readme.txt"), "clean");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"setup failed: {ex.Message}");
+                return 1;
+            }
+
+            RunPowerShell(
+                $"foreach ($f in @('{app}\\AutoCommand.exe', '{app}\\sub\\lib.dll')) " +
+                $"{{ Set-Content -Path ($f + ':Zone.Identifier') -Value '[ZoneTransfer]`r`nZoneId=3' }}");
+            Console.WriteLine("marks created");
+
+            var result = AutoCommand.Helpers.MotwUnblocker.UnblockFolder(app);
+            Console.WriteLine(result.Summary);
+
+            string check = RunPowerShell(
+                $"foreach ($f in (Get-ChildItem -LiteralPath '{app}' -Recurse -File)) " +
+                $"{{ $s = Get-Item -LiteralPath $f.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue; " +
+                $"Write-Output ($f.Name + ' marked=' + ($null -ne $s)) }}");
+
+            bool ok = result.Unblocked == 2 && result.AlreadyClean == 1 && result.Failures.Count == 0 &&
+                      !check.Contains("marked=True");
+            Console.WriteLine(check.Trim());
+            Console.WriteLine(ok ? "UNBLOCK: PASS" : "UNBLOCK: FAIL");
+            return ok ? 0 : 1;
+        }
+
+        private static string RunPowerShell(string scriptBody)
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "powershell", $"-NoProfile -Command \"{scriptBody}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            });
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(30000);
+            return output;
         }
 
         // -----------------------------------------------------------------------

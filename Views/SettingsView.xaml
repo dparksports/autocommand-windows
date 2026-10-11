@@ -45,6 +45,31 @@
                     </Grid>
                 </Border>
 
+                <!-- Unblock (SmartScreen / Smart App Control) -->
+                <Border Style="{StaticResource CardPanel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="Unblock (SmartScreen / Smart App Control)" Style="{StaticResource SectionHeader}"/>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,8">
+                            <Button x:Name="UnblockAppBtn" Content="🔓 Unblock this app's files" Style="{StaticResource PrimaryButton}"
+                                    Click="UnblockAppBtn_Click" Margin="0,0,8,0"/>
+                            <Button x:Name="UnblockFolderBtn" Content="📂 Unblock another folder…" Style="{StaticResource PrimaryButton}"
+                                    Click="UnblockFolderBtn_Click" Margin="0,0,12,0"/>
+                            <TextBlock x:Name="UnblockStatusText" Text="" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="2" Text="Windows marks every file extracted from a downloaded zip with the 'Mark-of-the-Web' — on Smart App Control machines that mark is what produces 'blocked: dangerous file from the web'. This removes the mark from this app's folder (or any folder you pick, e.g. a fresh zip extraction) so unsigned AutoCommand launches normally. Files are never modified — only the download marker is deleted. A standalone script (unblock-autocommand.ps1, on the Releases page) does the same without running the app."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+
                 <!-- Appearance -->
                 <Border Style="{StaticResource CardPanel}">
                     <Grid>

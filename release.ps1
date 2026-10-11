@@ -66,10 +66,11 @@ if (-not $DryRun) {
 }
 
 $relVersion = if ($DryRun) { $currentVersion } else { $Version }
-$notesFile = "release_notes_v$relVersion.md"
-$appZip    = "publish/AutoCommand-v$relVersion-win-x64.zip"
-$anaZip    = "publish/SvchostAnalyzer-win-x64.zip"
-$sumsFile  = "publish/SHA256SUMS.txt"
+$notesFile  = "release_notes_v$relVersion.md"
+$appZip     = "publish/AutoCommand-v$relVersion-win-x64.zip"
+$anaZip     = "publish/SvchostAnalyzer-win-x64.zip"
+$unblockPs1 = "publish/unblock-autocommand.ps1"
+$sumsFile   = "publish/SHA256SUMS.txt"
 
 # -- Build --------------------------------------------------------------------
 Step "Publishing self-contained win-x64 build (v$relVersion)"
@@ -101,12 +102,18 @@ foreach ($z in @($appZip, $anaZip)) { if (Test-Path $z) { Remove-Item $z } }
 Compress-Archive -Path "publish/v$relVersion/*" -DestinationPath $appZip
 Compress-Archive -Path "publish/analyzer-v$relVersion/SvchostAnalyzer.exe" -DestinationPath $anaZip
 
+# Standalone unblock script - separate downloadable asset for users who cannot
+# launch the app at all (Smart App Control / SmartScreen blocks on the
+# downloaded zip's Mark-of-the-Web).
+Copy-Item (Join-Path $PSScriptRoot 'unblock-autocommand.ps1') $unblockPs1 -Force
+
 $sums = @(
     "{0}  {1}" -f (Get-FileHash $appZip -Algorithm SHA256).Hash.ToLower(), (Split-Path $appZip -Leaf)
     "{0}  {1}" -f (Get-FileHash $anaZip -Algorithm SHA256).Hash.ToLower(), (Split-Path $anaZip -Leaf)
+    "{0}  {1}" -f (Get-FileHash $unblockPs1 -Algorithm SHA256).Hash.ToLower(), (Split-Path $unblockPs1 -Leaf)
 )
 [System.IO.File]::WriteAllLines((Join-Path $PSScriptRoot $sumsFile), $sums)
-Step "Wrote $sumsFile (app + analyzer)"
+Step "Wrote $sumsFile (app + analyzer + unblock script)"
 
 if ($DryRun) {
     Step "Dry run complete - build, zips and checksums verified; nothing committed, tagged or uploaded"
@@ -137,7 +144,7 @@ git push origin "v$Version"
 Assert-Exit 'git push tag'
 
 Step "Creating GitHub release"
-gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $anaZip $sumsFile
+gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $anaZip $unblockPs1 $sumsFile
 Assert-Exit 'gh release create'
 
 Step "Released v${Version}: https://github.com/dparksports/autocommand-windows/releases/tag/v${Version}"

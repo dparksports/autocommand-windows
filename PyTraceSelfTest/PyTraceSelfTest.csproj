@@ -19,6 +19,7 @@
     <Compile Include="..\Services\TlsDecryptor.cs" />
     <Compile Include="..\Services\PyTraceInstallerService.cs" />
     <Compile Include="..\Services\PyTraceReaderService.cs" />
+    <Compile Include="..\Helpers\MotwUnblocker.cs" />
     <Compile Include="..\Models\TcpFlowRecord.cs" />
     <Compile Include="..\Models\TlsDecryptResult.cs" />
     <Compile Include="..\Models\PyTraceRecord.cs" />

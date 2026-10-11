@@ -151,5 +151,57 @@ namespace AutoCommand.Views
             await FreshSetupService.DisableLaunchAtLogon();
             await CheckStartupTask();
         }
+
+        // -----------------------------------------------------------------------
+        // Unblock (Mark-of-the-Web removal) — see Helpers/MotwUnblocker.cs
+        // -----------------------------------------------------------------------
+
+        private async void UnblockAppBtn_Click(object sender, RoutedEventArgs e)
+        {
+            string dir = AppDomain.CurrentDomain.BaseDirectory;
+            UnblockAppBtn.IsEnabled = false;
+            UnblockStatusText.Text = $"Scanning {dir} …";
+            try
+            {
+                var result = await System.Threading.Tasks.Task.Run(() => MotwUnblocker.UnblockFolder(dir));
+                UnblockStatusText.Text = result.Summary;
+                if (result.Unblocked > 0)
+                    MessageBox.Show(
+                        $"Removed the download mark from {result.Unblocked} file(s) in this app's folder.\n\n" +
+                        "SmartScreen / Smart App Control will no longer treat them as downloaded\n" +
+                        "files — taskbar pins and direct launches work normally now.",
+                        "Unblocked", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            finally
+            {
+                UnblockAppBtn.IsEnabled = true;
+            }
+        }
+
+        private async void UnblockFolderBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Pick the folder to unblock (e.g. a freshly extracted AutoCommand zip)"
+            };
+            if (dialog.ShowDialog() != true) return;
+
+            UnblockFolderBtn.IsEnabled = false;
+            UnblockStatusText.Text = $"Scanning {dialog.FolderName} …";
+            try
+            {
+                var result = await System.Threading.Tasks.Task.Run(() => MotwUnblocker.UnblockFolder(dialog.FolderName));
+                UnblockStatusText.Text = result.Summary;
+                if (result.Failures.Count > 0)
+                    MessageBox.Show(
+                        $"{result.Summary}\n\nFiles in use or in admin-only locations could not be updated —\n" +
+                        "close the apps using them, or re-run AutoCommand as Administrator and try again.",
+                        "Unblock", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                UnblockFolderBtn.IsEnabled = true;
+            }
+        }
     }
 }
