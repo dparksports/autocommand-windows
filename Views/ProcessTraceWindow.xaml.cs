@@ -1,0 +1,174 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Media;
+using AutoCommand.Services;
+
+namespace AutoCommand.Views
+{
+    /// <summary>
+    /// PID Inquiry — "how was this PID spawned?" for any process visible in
+    /// the Process Monitor (row context menu) or typed/picked in the PID
+    /// dropdown. Renders the ProvenanceReport collected by
+    /// ProcessProvenanceService: verdict, identity, verified ancestry chain,
+    /// and corroborating records (Sysmon create-events, shell history,
+    /// autostart entries, hosted services).
+    /// </summary>
+    public partial class ProcessTraceWindow : Window
+    {
+        private readonly int _pid;
+        private readonly string _knownName;
+        private readonly string _knownImage;
+        private readonly TaskLaunchInfo _taskHint;
+        private ProvenanceReport _report;
+        private bool _busy;
+
+        public ProcessTraceWindow(int pid, string knownName, string knownImagePath, TaskLaunchInfo taskHint)
+        {
+            _pid = pid;
+            _knownName = knownName;
+            _knownImage = knownImagePath;
+            _taskHint = taskHint;
+            InitializeComponent();
+            Title = $"PID Inquiry — {pid} {knownName}".TrimEnd();
+            Loaded += (_, _) => _ = CollectAsync();
+        }
+
+        private async Task CollectAsync()
+        {
+            if (_busy) return;
+            _busy = true;
+            try
+            {
+                StatusText.Text = "Collecting… (WMI snapshot, parent chain, Sysmon events, shell history)";
+                var report = await Task.Run(() =>
+                    ProcessProvenanceService.Collect(_pid, _knownName, _knownImage, _taskHint));
+                _report = report;
+                Render(report);
+                StatusText.Text = $"Collected in {report.Elapsed.TotalSeconds:F1}s · {DateTime.Now:HH:mm:ss} · " +
+                                  "collection is read-only";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "Collection failed: " + ex.Message;
+            }
+            finally
+            {
+                _busy = false;
+            }
+        }
+
+        private void Render(ProvenanceReport r)
+        {
+            Title = $"PID Inquiry — {r.Pid} · {Path.GetFileName(r.ExePath ?? r.Name ?? "?")}";
+
+            VerdictKindText.Text = r.Verdict;
+            VerdictDetailText.Text = r.VerdictDetail;
+            (Color bg, Color fg) = r.Verdict switch
+            {
+                string v when v.StartsWith("User-launched", StringComparison.Ordinal) => ((Color)ColorConverter.ConvertFromString("#14351F"), (Color)ColorConverter.ConvertFromString("#7ED8A0")),
+                string v when v.StartsWith("Scheduled", StringComparison.Ordinal)    => ((Color)ColorConverter.ConvertFromString("#3A2E10"), (Color)ColorConverter.ConvertFromString("#FBBF24")),
+                string v when v.StartsWith("Windows service", StringComparison.Ordinal) => ((Color)ColorConverter.ConvertFromString("#1A4A8A"), (Color)ColorConverter.ConvertFromString("#7EB8F7")),
+                _ => ((Color)ColorConverter.ConvertFromString("#3A1520"), (Color)ColorConverter.ConvertFromString("#F2A0B4"))
+            };
+            VerdictBanner.Background = new SolidColorBrush(bg);
+            VerdictKindText.Foreground = new SolidColorBrush(fg);
+            VerdictDetailText.Foreground = new SolidColorBrush(Color.FromArgb(0xD0, fg.R, fg.G, fg.B));
+
+            IdentName.Text = r.Name ?? "?";
+            IdentPid.Text = r.Pid.ToString();
+            IdentCreated.Text = r.Created?.ToString("yyyy-MM-dd HH:mm:ss") ?? "unknown";
+            IdentOwner.Text = r.Owner ?? "unknown";
+            IdentSession.Text = r.Session ?? "?";
+            IdentMemory.Text = r.Alive ? r.Memory ?? "—" : "— (not running)";
+            IdentImage.Text = r.ExePath;
+            IdentCmd.Text = r.CommandLine;
+
+            var rows = new List<ChainRowVm>();
+            for (int i = 0; i < r.Chain.Count; i++)
+            {
+                var link = r.Chain[i];
+                rows.Add(new ChainRowVm
+                {
+                    Arrow = i == 0 ? "▸ this process" : "↑ spawned by",
+                    Head = $"PID {link.Pid,-7} {link.Name ?? "?"}   started {link.Created?.ToString("yyyy-MM-dd HH:mm:ss") ?? "unknown"}   {link.Owner ?? ""}",
+                    Cmd = link.CommandLine,
+                    Note = link.Note,
+                    Verified = link.Verified
+                });
+            }
+            ChainList.ItemsSource = rows;
+
+            EvidenceList.ItemsSource = r.Evidence
+                .Select(ev => new { Source = ev.Source, Detail = ev.Detail })
+                .ToList();
+
+            WarningsText.Text = r.Warnings.Count == 0
+                ? null
+                : "⚠ " + string.Join("\n⚠ ", r.Warnings);
+        }
+
+        private void RefreshBtn_Click(object sender, RoutedEventArgs e) => _ = CollectAsync();
+
+        private void CopyBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_report == null) return;
+            try
+            {
+                Clipboard.SetText(BuildReportText(_report));
+                StatusText.Text = "Report copied to clipboard.";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "Copy failed: " + ex.Message;
+            }
+        }
+
+        private static string BuildReportText(ProvenanceReport r)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"PID INQUIRY — {r.Pid} · {r.Name}");
+            sb.AppendLine($"Verdict: {r.Verdict} — {r.VerdictDetail}");
+            sb.AppendLine($"Identity: image {r.ExePath ?? "?"} · started {r.Created:yyyy-MM-dd HH:mm:ss} · " +
+                          $"owner {r.Owner ?? "?"} · {(r.Alive ? "running" : "not running")}");
+            if (!string.IsNullOrEmpty(r.CommandLine))
+                sb.AppendLine("Command line: " + r.CommandLine);
+            sb.AppendLine();
+            sb.AppendLine("SPAWN CHAIN (child → root):");
+            foreach (var link in r.Chain)
+            {
+                sb.AppendLine($"  PID {link.Pid} · {link.Name} · {link.Created:yyyy-MM-dd HH:mm:ss} · " +
+                              $"{link.Owner ?? "?"}{(link.Verified ? "" : "   [UNVERIFIED]")}");
+                if (!string.IsNullOrEmpty(link.CommandLine)) sb.AppendLine("      cmd: " + link.CommandLine);
+                if (!string.IsNullOrEmpty(link.Note)) sb.AppendLine("      note: " + link.Note);
+            }
+            sb.AppendLine();
+            sb.AppendLine("EVIDENCE:");
+            foreach (var ev in r.Evidence)
+                sb.AppendLine($"  [{ev.Source}] {ev.Detail.Replace("\r\n      ", "\r\n       ")}");
+            if (r.Warnings.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("WARNINGS:");
+                foreach (string w in r.Warnings) sb.AppendLine("  " + w);
+            }
+            sb.AppendLine();
+            sb.AppendLine($"Generated {DateTime.Now:yyyy-MM-dd HH:mm:ss} by AutoCommand Process Monitor (read-only inquiry)");
+            return sb.ToString();
+        }
+
+        /// <summary>Display row for one ancestry hop.</summary>
+        private sealed class ChainRowVm
+        {
+            public string Arrow { get; set; }
+            public string Head { get; set; }
+            public string Cmd { get; set; }
+            public string Note { get; set; }
+            public bool Verified { get; set; } = true;
+        }
+    }
+}

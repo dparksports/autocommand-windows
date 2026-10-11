@@ -330,6 +330,12 @@ namespace AutoCommand.Views
         {
             var sel = SvchostGrid.SelectedItem as SvchostMonitorItem;
 
+            bool traceable = sel != null && sel.ProcessId > 0;
+            TracePidMenuItem.IsEnabled = traceable;
+            TracePidMenuItem.Header = traceable
+                ? $"🔎 Trace PID {sel.ProcessId} — how was it spawned?"
+                : "🔎 Trace: how was this PID spawned?";
+
             IgnoreRowMenuItem.Header = sel != null && !string.IsNullOrEmpty(sel.ProcessName)
                 ? $"🚫 Ignore process '{sel.ProcessName}'"
                 : "🚫 Ignore process (no row selected)";
@@ -412,6 +418,79 @@ namespace AutoCommand.Views
             {
                 row.IsSelected = true;
             }
+        }
+
+        // -----------------------------------------------------------------------
+        // PID inquiry — provenance tracing ("how was this spawned?")
+        // -----------------------------------------------------------------------
+
+        private void TracePidMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (SvchostGrid.SelectedItem is SvchostMonitorItem item)
+                OpenPidTrace(item.ProcessId, item);
+        }
+
+        /// <summary>
+        /// Refreshes the inquiry dropdown with every PID currently shown in
+        /// the grid (most recently active first). Rebuilding ItemsSource
+        /// clears the editable text, so whatever the user typed is restored.
+        /// </summary>
+        private void PidCombo_DropDownOpened(object sender, EventArgs e)
+        {
+            string typed = PidCombo.Text;
+            PidCombo.ItemsSource = _uiCollection
+                .GroupBy(i => i.ProcessId)
+                .Select(g => g.OrderByDescending(i => i.LastSeen).First())
+                .OrderByDescending(i => i.LastSeen)
+                .Select(i => i.ProcessId == 0
+                    ? "0 · System"
+                    : $"{i.ProcessId} · {i.ProcessName ?? "?"}")
+                .ToList();
+            PidCombo.Text = typed;
+        }
+
+        private void PidCombo_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter) TracePidBtn_Click(sender, e);
+        }
+
+        private void TracePidBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Accepts both a bare PID and a picked "1234 · name" entry
+            string text = (PidCombo.Text ?? string.Empty).Trim();
+            int len = 0;
+            while (len < text.Length && char.IsDigit(text[len])) len++;
+            if (len == 0 || !int.TryParse(text.AsSpan(0, len), out int pid) || pid < 0)
+            {
+                MessageBox.Show("Enter or pick a PID first — e.g. 20264 (the '1234 · name' dropdown entries work too).",
+                    "PID Inquiry", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            OpenPidTrace(pid, _uiCollection.FirstOrDefault(i => i.ProcessId == pid));
+        }
+
+        /// <summary>
+        /// Opens the read-only PID inquiry window. Row hints (name, Sysmon
+        /// image path, task attribution) travel along so the report stays
+        /// meaningful even when the process has already exited.
+        /// </summary>
+        private void OpenPidTrace(int pid, SvchostMonitorItem item)
+        {
+            if (pid <= 0)
+            {
+                MessageBox.Show("The System/Idle process has no spawn chain to trace.",
+                    "PID Inquiry", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var win = new ProcessTraceWindow(
+                pid,
+                item?.ProcessName,
+                item?.ImagePath,
+                item != null ? _taskAttribution.GetTaskForPid(pid) : null)
+            {
+                Owner = Window.GetWindow(this)
+            };
+            win.Show();
         }
 
         // -----------------------------------------------------------------------

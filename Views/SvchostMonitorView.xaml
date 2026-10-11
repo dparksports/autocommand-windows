@@ -45,7 +45,17 @@
                 </Border>
                 <StackPanel Grid.Column="2" Orientation="Horizontal">
                     <CheckBox x:Name="HideCloudCheck" Content="Hide Known/Cloud IPs" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" Checked="Filter_Changed" Unchecked="Filter_Changed"/>
-                    <TextBlock Text="Add Process:" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0"/>
+                    <!-- PID inquiry: pick any PID shown below (or type one) and
+                         trace how it was spawned — same engine as the row
+                         context-menu's "Trace" item. -->
+                    <TextBlock Text="🔎 Inquire PID:" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,0,8,0"
+                               ToolTip="Trace how any PID shown in the monitor was spawned: verified parent chain, spawn mechanism (shell / task / service / autostart), Sysmon create-events and typed shell history."/>
+                    <ComboBox x:Name="PidCombo" Width="140" IsEditable="True" FontFamily="Consolas"
+                              DropDownOpened="PidCombo_DropDownOpened" KeyDown="PidCombo_KeyDown"
+                              ToolTip="Drop down to pick a PID from the list, or type any PID. Enter traces it."/>
+                    <Button Content="Trace" Click="TracePidBtn_Click" Margin="8,0,0,0" Padding="12,2" Style="{StaticResource PrimaryButton}"
+                            ToolTip="Open the PID inquiry window (read-only)"/>
+                    <TextBlock Text="Add Process:" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="16,0,8,0"/>
                     <TextBox x:Name="NewProcessBox" Width="150" Padding="4" Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}" BorderBrush="{DynamicResource BorderBrush}"/>
                     <Button Content="Add" Click="AddProcessBtn_Click" Margin="8,0,0,0" Padding="12,2" Style="{StaticResource PrimaryButton}"/>
                     <TextBlock Text="Ignore Process:" VerticalAlignment="Center" Foreground="{DynamicResource TextSecondaryBrush}" Margin="16,0,8,0"
@@ -107,6 +117,8 @@
             </DataGrid.RowStyle>
             <DataGrid.ContextMenu>
                 <ContextMenu Opened="RowMenu_Opened">
+                    <MenuItem x:Name="TracePidMenuItem" Header="🔎 Trace: how was this PID spawned?" Click="TracePidMenuItem_Click"/>
+                    <Separator/>
                     <MenuItem x:Name="IgnoreRowMenuItem" Header="🚫 Ignore this process" Click="IgnoreRowMenuItem_Click"/>
                     <Separator/>
                     <MenuItem x:Name="BlockIpMenuItem" Header="⛔ Block Remote IP in Firewall" Click="BlockRemoteIP_Click"/>
