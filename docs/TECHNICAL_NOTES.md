@@ -108,5 +108,19 @@ How AutoCommand delivers what the [README](../README.md) promises: the technolog
 | `<app>\check_interval.txt` | Security Enforcer cadence |
 | `<app>\update_freeze.json` + `freeze_backups\` | Frozen self-updaters and their ACL snapshots |
 | `<app>\telemetry_state.json` | Snapshots of the settings changed by telemetry opt-outs |
+| `%LOCALAPPDATA%\AutoCommand\pytrace\` | Python Spawns tab state — see below |
+
+### Python Spawns tab (`%LOCALAPPDATA%\AutoCommand\pytrace\`)
+
+| File | Purpose |
+|---|---|
+| `trace-<pid>.jsonl` | Audit-hook records from instrumented pythons (written by the hook, tailed + cleaned up by the app) |
+| `sslkeys.log` (+ `.old` while rotating) | TLS session keys written by instrumented pythons via `SSLKEYLOGFILE`; created with a current-user-only ACL, rotated at 5 MB, `.old` deleted at app exit |
+| `no-keylog` | Flag file: the "Disable TLS keylogging" toggle — its presence makes the hook stop setting `SSLKEYLOGFILE` |
+| `instrumented.json` | Manifest of python environments the audit hook was installed into (and the exact files written) |
+| `settings.json` | Tab settings (keylog toggle state, flow persistence, flow caps) |
+| `flows\*.jsonl` | Optional persisted TCP flows (base64 payloads, off by default, rotated by budget) |
+
+Outside that directory the tab only **reads**: the Sysmon operational channel (EID 1/5/3) and raw packets from the NIC on its own socket. The instrumentation itself is opt-in per python environment: two small files (`PyTraceHook_ac.py` + `.pth`) written into that environment's site-packages, tracked in the manifest, removable from the Instrument dialog. Nothing inside a venv is ever read for correlation; the interpreter binary is never touched.
 
 Telemetry is **opt-in** and limited to the Firebase JS SDK inside a sandboxed WebView2 control; nothing else in the app sends data anywhere on its own.

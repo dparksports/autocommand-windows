@@ -33,6 +33,7 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 | 📦 **Bloatware** | 23 preinstalled apps removed in one sweep. Use one of them? Toggle it off the list — permanently. |
 | 🧭 **Sysmon Audit** | One status card + a live feed of every process launch with full command line and parent. Installed and configured from the app. |
 | 🔍 **Process Monitor** | Live grid of outbound connections with packet counters (no WinPcap needed), background reverse-DNS, and attribution that survives process exit. Block, kill, inspect — with warnings before you take out something Windows needs. |
+| 🐍 **Python Spawns** | Every `python.exe` launch as it happens — who spawned it (parent image + command line), what it ran, when it exited. For environments you explicitly instrument: the **Python call stack at the moment a spawn API fired**, and **decrypted TLS plaintext** of what the process sent (SNI, HTTP request/response), from its own SSLKEYLOGFILE secrets + a NIC-level TCP capture. |
 | 🔬 **Svchost Trace** | A timeline over the 70+ `svchost.exe` service hosts — spawns with parents, connection lifetimes, byte flows — plus a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows. Exports JSONL; drives a headless capture service with boot auto-start. The capture engine is built into the app (no separate binary to install or unblock); an optional standalone SvchostAnalyzer.exe remains for headless 24/7 recording with boot auto-start — offered as a one-click SHA-256-verified install when you enable it. |
 | 📊 **Telemetry** | Known telemetry senders (Edge, Chrome, .NET CLI, VS Code, …), the vendor's own documented opt-out, previous value snapshotted, quiet verified via the DNS cache. |
 | 👁 **Privacy** | Microsoft's diagnostic task disabled, AutoCommand's own analytics opt-in, tamper-protection status visible. |
@@ -44,6 +45,18 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 ![Quick Scan — one guided pass](Assets/corp_debloat.png?v=fluent1)
 
 ![Process Monitor and Sysmon Audit](Assets/corp_visibility.png?v=fluent1)
+
+## Python Spawns, in depth
+
+Three questions about every python process that starts on the machine, answered live in one tab:
+
+- **Who / what / when** — Sysmon Event ID 1 traces every `python.exe`/`pythonw.exe` creation with the full parentage (parent image + parent command line), command line, user, integrity level, hashes, and an Exited flag from Event ID 5. A venv command spawns two processes (launcher + base interpreter); they collapse into one row with a **venv** badge — correlation is purely parent-PID-based, nothing inside the venv is ever read.
+- **Why (the in-process answer)** — a ~90-line audit hook (`sys.addaudithook`, shipped as an embedded payload) is installed **opt-in per environment** into its site-packages. Instrumented pythons record the Python call stack whenever a spawn API fires (`subprocess.Popen`, `_winapi.CreateProcess`, `os.system`, `os.exec/spawn/posix_spawn`, `os.startfile`, even another `sys.addaudithook`), as JSONL the app tails and joins to spawn rows by pid.
+- **What they send** — the hook also sets `SSLKEYLOGFILE` (CPython's own mechanism) before user code runs. The tab captures TCP streams on its own raw socket (SIO_RCVALL), attributes flows to pids at connect time (Sysmon EID 3), and decrypts TLS **1.2 and 1.3** in-tab — endpoints, SNI, ALPN, and readable HTTP request/response records. All crypto is in-box .NET (`AesGcm`, `ChaCha20Poly1305`, HKDF/PRF) — no extra dependency.
+
+**The consent model is asymmetric by design:** everything observational (spawns, parentage, endpoints, byte counts) needs no cooperation and no opt-in. Stacks and plaintext exist *only* for environments you instrumented yourself, via a button that shows exactly what will be written, and an uninstall that removes only the manifest-listed files. The keylog lives in a current-user-only-ACL file, rotates at 5 MB, is deleted at app exit when rotated, and one toggle wipes it and stops the hook from creating one.
+
+**Limitations, honestly:** loopback traffic never crosses the NIC (invisible to the capture); IPv6 and UDP/QUIC are out of scope; pid→flow attribution is by endpoint at connect time; code that builds a raw `ssl.SSLContext` directly, or uses custom crypto, ignores `SSLKEYLOGFILE`; `-S`, frozen and embedded interpreters never load site at all and cannot be instrumented (a `.pth` in real site-packages survives `-I`/`-E`); TLS 1.3 KeyUpdate re-derivation is best-effort and failures are flagged, never guessed. The engine pieces that can run headless have an offline self-test (`docs/selftest/run-selftest.ps1` — reassembly, the hook payload, and decryption of a real TLS 1.2/1.3 session over a loopback relay, no admin needed); the Sysmon watcher and raw-socket capture need the app elevated.
 
 ## Blocked things, managed
 

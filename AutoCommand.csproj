@@ -6,7 +6,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <Version>2026.10.20</Version>
+    <Version>2026.10.21</Version>
     <AssemblyName>AutoCommand</AssemblyName>
     <Product>AutoCommand</Product>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -34,6 +34,10 @@
 
   <ItemGroup>
     <Resource Include="app_icon.ico" />
+    <!-- The python audit-hook payload: embedded, read via
+         Assembly.GetManifestResourceStream by PyTraceInstallerService — never
+         written to disk as a standalone app file. -->
+    <EmbeddedResource Include="Assets\PyTraceHook.py" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +53,9 @@
     <!-- Exclude scratch/test scripts — they define their own Main() -->
     <Compile Remove="ScratchTest\**" />
     <Compile Remove="Sdk\**" />
+    <!-- Self-test harness: links the app's services itself and has its own
+         Main() (same reason as ScratchTest) -->
+    <Compile Remove="PyTraceSelfTest\**" />
   </ItemGroup>
 
   <!-- Filter out Linux .so native binaries when publishing for Windows win-x64 -->

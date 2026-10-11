@@ -180,6 +180,7 @@ namespace AutoCommand
         {
             _enforcer?.Stop();
             _trayNotifier?.Dispose();
+            Services.TlsKeylogService.CleanupAtExit(); // drop the rotated TLS keylog leftover
             base.OnClosed(e);
         }
 

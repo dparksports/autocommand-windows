@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline self-test for the Python Spawns tab's non-UI engine. Compiles
+       the WPF-free services from the app project directly, so what runs here
+       is byte-identical to what ships in AutoCommand. Excluded from the app
+       build (AutoCommand.csproj Compile Remove, like ScratchTest): it has its
+       own Main() and would double-define the linked service classes. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>PyTraceSelfTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Services\TcpStreamCaptureService.cs" />
+    <Compile Include="..\Services\TlsKeylogService.cs" />
+    <Compile Include="..\Services\TlsDecryptor.cs" />
+    <Compile Include="..\Models\TcpFlowRecord.cs" />
+    <Compile Include="..\Models\TlsDecryptResult.cs" />
+  </ItemGroup>
+
+</Project>
