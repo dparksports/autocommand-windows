@@ -126,7 +126,7 @@ git push origin "v$Version"
 Assert-Exit 'git push tag'
 
 Step "Creating GitHub release"
-gh release create "v$Version" --title "AutoCommand v$Version" --notes-file "release_notes_v$Version.md" $appZip $anaZip $sumsFile
+gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $anaZip $sumsFile
 Assert-Exit 'gh release create'
 
 Step "Released v${Version}: https://github.com/dparksports/autocommand-windows/releases/tag/v${Version}"
