@@ -10,23 +10,49 @@ using AutoCommand.Models;
 namespace AutoCommand.Services
 {
     /// <summary>
-    /// Real-time tracing of python process creations system-wide from the
-    /// Sysmon operational channel: EID 1 (create, with full parentage), EID 5
-    /// (terminate, flips Exited) and EID 3 (network connect, used to attribute
-    /// captured TCP flows to the spawning pid). EID 1 fires for every process
-    /// creation on the machine, so records are pre-filtered by a cheap
-    /// substring scan and discarded early unless the image path is python-ish.
+    /// Real-time tracing of process creations for a chosen image family
+    /// (python.exe, taskhostw.exe, …) from the Sysmon operational channel:
+    /// EID 1 (create, with full parentage), EID 5 (terminate, flips Exited)
+    /// and EID 3 (network connect, used to attribute captured TCP flows to
+    /// the spawning pid). EID 1 fires for every process creation on the
+    /// machine, so records are pre-filtered by a cheap substring scan and
+    /// discarded early unless the image passes the caller's filter.
     /// </summary>
-    public class PythonSpawnWatcherService : IDisposable
+    public class ImageSpawnWatcherService : IDisposable
     {
         private EventLogWatcher _spawnWatcher;
         private EventLogWatcher _exitWatcher;
         private EventLogWatcher _netWatcher;
         private bool _disposed;
 
+        private readonly Func<string, bool> _imageFilter;
+        private readonly string _xmlKeyword;
+        private readonly bool _venvPairing;
+
+        /// <param name="imageFilter">Client-side image filter (full path in).</param>
+        /// <param name="xmlKeyword">Cheap substring pre-filter applied to the raw event XML
+        /// before parsing — must match everything imageFilter accepts.</param>
+        /// <param name="venvPairing">Enable the python venv launcher/interpreter pairing.</param>
+        public ImageSpawnWatcherService(Func<string, bool> imageFilter, string xmlKeyword, bool venvPairing = false)
+        {
+            _imageFilter = imageFilter;
+            _xmlKeyword = xmlKeyword;
+            _venvPairing = venvPairing;
+        }
+
+        /// <summary>Python family filter: any path containing "python".</summary>
+        public static bool IsPythonImage(string image) =>
+            !string.IsNullOrEmpty(image) &&
+            image.IndexOf("python", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>taskhostw filter: the scheduled-task host binary exactly.</summary>
+        public static bool IsTaskhostwImage(string image) =>
+            !string.IsNullOrEmpty(image) &&
+            image.EndsWith("taskhostw.exe", StringComparison.OrdinalIgnoreCase);
+
         // Tracked spawns by pid — drives venv pairing and EID 5 lookup. A pid
         // reuse replaces the entry (old rows keep their own copy of the data).
-        private readonly Dictionary<int, PythonSpawnItem> _tracked = new();
+        private readonly Dictionary<int, SpawnItem> _tracked = new();
         private readonly object _trackedLock = new();
 
         // EID 5 can beat its own EID 1 through the independent watchers;
@@ -37,9 +63,9 @@ namespace AutoCommand.Services
         private const int TrackedCap = 20000;
 
         public event Action<string> OnError;
-        public event Action<PythonSpawnItem> OnSpawn;
-        public event Action<PythonSpawnItem> OnExited;
-        public event Action<PythonNetworkEvent> OnNetworkConnect;
+        public event Action<SpawnItem> OnSpawn;
+        public event Action<SpawnItem> OnExited;
+        public event Action<SpawnNetworkEvent> OnNetworkConnect;
 
         public int TrackedCount { get { lock (_trackedLock) return _tracked.Count; } }
 
@@ -101,13 +127,13 @@ namespace AutoCommand.Services
         {
             try
             {
-                var fields = ParseIfPython(e);
+                var fields = ParseIfMatched(e, _xmlKeyword);
                 if (fields == null) return;
 
                 int pid = ParsePid(GetValue(fields, "ProcessId"));
                 if (pid <= 0) return;
 
-                var item = new PythonSpawnItem
+                var item = new SpawnItem
                 {
                     TimeUtc = ParseUtcTime(GetValue(fields, "UtcTime"), e.EventRecord?.TimeCreated),
                     Pid = pid,
@@ -147,8 +173,9 @@ namespace AutoCommand.Services
         /// row is absorbed into the detail pane. Correlation is purely
         /// ParentProcessId-based — nothing inside the venv is ever read.
         /// </summary>
-        private void PairWithLauncher(PythonSpawnItem item)
+        private void PairWithLauncher(SpawnItem item)
         {
+            if (!_venvPairing) return;
             if (item.ParentPid <= 0) return;
             if (!_tracked.TryGetValue(item.ParentPid, out var parent)) return;
             if (parent.Exited || parent.Pid == item.Pid) return;
@@ -172,11 +199,6 @@ namespace AutoCommand.Services
             image.IndexOf("\\Scripts\\", StringComparison.OrdinalIgnoreCase) >= 0 &&
             IsPythonImage(image);
 
-        /// <summary>Client-side filter: keep only events whose image path is python-ish.</summary>
-        private static bool IsPythonImage(string image) =>
-            !string.IsNullOrEmpty(image) &&
-            image.IndexOf("python", StringComparison.OrdinalIgnoreCase) >= 0;
-
         private void PruneIfNeeded()
         {
             if (_tracked.Count < TrackedCap) return;
@@ -197,13 +219,13 @@ namespace AutoCommand.Services
         {
             try
             {
-                var fields = ParseIfPython(e);
+                var fields = ParseIfMatched(e, _xmlKeyword);
                 if (fields == null) return;
 
                 int pid = ParsePid(GetValue(fields, "ProcessId"));
                 if (pid <= 0) return;
 
-                PythonSpawnItem item;
+                SpawnItem item;
                 lock (_trackedLock)
                 {
                     if (!_tracked.TryGetValue(pid, out item))
@@ -229,7 +251,7 @@ namespace AutoCommand.Services
         {
             try
             {
-                var fields = ParseIfPython(e);
+                var fields = ParseIfMatched(e, _xmlKeyword);
                 if (fields == null) return;
 
                 string proto = GetValue(fields, "Protocol");
@@ -238,7 +260,7 @@ namespace AutoCommand.Services
                 int pid = ParsePid(GetValue(fields, "ProcessId"));
                 if (pid <= 0) return;
 
-                OnNetworkConnect?.Invoke(new PythonNetworkEvent
+                OnNetworkConnect?.Invoke(new SpawnNetworkEvent
                 {
                     TimeUtc = ParseUtcTime(GetValue(fields, "UtcTime"), e.EventRecord?.TimeCreated),
                     Pid = pid,
@@ -261,11 +283,11 @@ namespace AutoCommand.Services
         // python only costs one wasted parse; a real python image never
         // escapes the scan).
 
-        private static Dictionary<string, string> ParseIfPython(EventRecordWrittenEventArgs e)
+        private Dictionary<string, string> ParseIfMatched(EventRecordWrittenEventArgs e, string keyword)
         {
             if (e.EventRecord == null) return null;
             string xml = e.EventRecord.ToXml();
-            if (xml.IndexOf("python", StringComparison.OrdinalIgnoreCase) < 0) return null;
+            if (xml.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0) return null;
 
             var doc = XDocument.Parse(xml);
             XNamespace ns = "http://schemas.microsoft.com/win/2004/08/events/event";
@@ -279,7 +301,7 @@ namespace AutoCommand.Services
                 if (name != null && !fields.ContainsKey(name)) fields[name] = data.Value;
             }
 
-            return IsPythonImage(GetValue(fields, "Image")) ? fields : null;
+            return _imageFilter(GetValue(fields, "Image")) ? fields : null;
         }
 
         private static string GetValue(Dictionary<string, string> fields, string name) =>
@@ -317,7 +339,7 @@ namespace AutoCommand.Services
     }
 
     /// <summary>A python TCP connect as seen by Sysmon EID 3 — the pid↔flow attribution source.</summary>
-    public class PythonNetworkEvent
+    public class SpawnNetworkEvent
     {
         public DateTime TimeUtc { get; set; }
         public int Pid { get; set; }

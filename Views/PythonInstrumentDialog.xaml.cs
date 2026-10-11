@@ -20,7 +20,7 @@ namespace AutoCommand.Views
     public partial class PythonInstrumentDialog : Window
     {
         private readonly PyTraceInstallerService _installer = new();
-        private readonly PythonSpawnWatcherService _watcher;
+        private readonly ImageSpawnWatcherService _watcher;
 
         private readonly ObservableCollection<EnvRow> _rows = new();
         private readonly HashSet<string> _knownSitePackages = new(StringComparer.OrdinalIgnoreCase);
@@ -42,7 +42,7 @@ namespace AutoCommand.Views
                     : System.Windows.Visibility.Visible;
         }
 
-        public PythonInstrumentDialog(PythonSpawnWatcherService watcher = null)
+        public PythonInstrumentDialog(ImageSpawnWatcherService watcher = null)
         {
             InitializeComponent();
             _watcher = watcher;

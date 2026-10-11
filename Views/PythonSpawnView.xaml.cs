@@ -24,11 +24,11 @@ namespace AutoCommand.Views
     {
         private const int RowCap = 5000;
 
-        private readonly ObservableCollection<PythonSpawnItem> _rows = new();
-        private readonly Dictionary<int, PythonSpawnItem> _rowByPid = new();
+        private readonly ObservableCollection<SpawnItem> _rows = new();
+        private readonly Dictionary<int, SpawnItem> _rowByPid = new();
         private readonly Dictionary<int, List<TcpFlowRecord>> _flowsByPid = new();
 
-        private PythonSpawnWatcherService _watcher;
+        private ImageSpawnWatcherService _watcher;
         private PyTraceReaderService _traceReader;
         private TcpStreamCaptureService _capture;
         private TlsKeylogService _keylog;
@@ -36,9 +36,9 @@ namespace AutoCommand.Views
         private bool _initialized;
         private bool _watching;
         private bool _paused;
-        private readonly Queue<PythonSpawnItem> _pauseBuffer = new();
+        private readonly Queue<SpawnItem> _pauseBuffer = new();
         private Regex _filter;
-        private PythonSpawnItem _selected;
+        private SpawnItem _selected;
         private TcpFlowRecord _selectedFlow;
         private TlsDecryptResult _decryptResult;
         private string _settingsPath;
@@ -50,7 +50,7 @@ namespace AutoCommand.Views
 
             var view = (ListCollectionView)CollectionViewSource.GetDefaultView(_rows);
             view.SortDescriptions.Add(new System.ComponentModel.SortDescription(
-                nameof(PythonSpawnItem.TimeUtc), System.ComponentModel.ListSortDirection.Descending));
+                nameof(SpawnItem.TimeUtc), System.ComponentModel.ListSortDirection.Descending));
             view.Filter = FilterRow;
         }
 
@@ -72,7 +72,7 @@ namespace AutoCommand.Views
 
         private void InitializeServices()
         {
-            _watcher = new PythonSpawnWatcherService();
+            _watcher = new ImageSpawnWatcherService(ImageSpawnWatcherService.IsPythonImage, "python", venvPairing: true);
             _traceReader = new PyTraceReaderService();
             _capture = new TcpStreamCaptureService();
             _keylog = new TlsKeylogService();
@@ -128,7 +128,7 @@ namespace AutoCommand.Views
         // Spawn rows
         // -----------------------------------------------------------------------
 
-        private void OnSpawn(PythonSpawnItem item)
+        private void OnSpawn(SpawnItem item)
         {
             Dispatcher.BeginInvoke(() =>
             {
@@ -143,7 +143,7 @@ namespace AutoCommand.Views
             });
         }
 
-        private void AddRow(PythonSpawnItem item)
+        private void AddRow(SpawnItem item)
         {
             // A venv pair collapses to the interpreter row; the launcher row
             // (added a moment earlier) leaves the grid and lives in the pane.
@@ -167,7 +167,7 @@ namespace AutoCommand.Views
             UpdateStatus();
         }
 
-        private void OnNetworkConnect(PythonNetworkEvent evt)
+        private void OnNetworkConnect(SpawnNetworkEvent evt)
         {
             // Endpoint-at-connect-time attribution (Sysmon EID 3 → live flow)
             _capture.TagFlow(evt.SourceIp, evt.SourcePort, evt.DestIp, evt.DestPort, evt.Pid, evt.Image);
@@ -277,7 +277,7 @@ namespace AutoCommand.Views
 
         private void CopyRowMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            if (SpawnGrid.SelectedItem is PythonSpawnItem item)
+            if (SpawnGrid.SelectedItem is SpawnItem item)
                 Clipboard.SetText(JsonSerializer.Serialize(item, new JsonSerializerOptions { WriteIndented = true }));
         }
 
@@ -303,7 +303,7 @@ namespace AutoCommand.Views
 
         private bool FilterRow(object obj)
         {
-            if (obj is not PythonSpawnItem item) return false;
+            if (obj is not SpawnItem item) return false;
             if (item.IsAbsorbedLauncher) return false;
             if (_filter == null) return true;
             return _filter.IsMatch($"{item.CommandLine} {item.ParentCommandLine} {item.Image}");
@@ -315,11 +315,11 @@ namespace AutoCommand.Views
 
         private void SpawnGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            _selected = SpawnGrid.SelectedItem as PythonSpawnItem;
+            _selected = SpawnGrid.SelectedItem as SpawnItem;
             RenderDetail(_selected);
         }
 
-        private void RenderDetail(PythonSpawnItem item)
+        private void RenderDetail(SpawnItem item)
         {
             DetailRecordPanel.Children.Clear();
             if (item == null)
@@ -378,7 +378,7 @@ namespace AutoCommand.Views
             DetailRecordPanel.Children.Add(panel);
         }
 
-        private void RenderStackSection(PythonSpawnItem item)
+        private void RenderStackSection(SpawnItem item)
         {
             var records = _traceReader.GetForPid(item.Pid);
             if (records.Count == 0)
@@ -399,7 +399,7 @@ namespace AutoCommand.Views
             StackText.Text = sb.ToString().TrimEnd();
         }
 
-        private void RenderFlowList(PythonSpawnItem item)
+        private void RenderFlowList(SpawnItem item)
         {
             FlowList.ItemsSource = _flowsByPid.TryGetValue(item.Pid, out var list)
                 ? list.Select(f => f.Display).ToList()

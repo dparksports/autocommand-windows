@@ -12,7 +12,7 @@ namespace AutoCommand.Models
     /// carries the record and the launcher is shown in the detail pane.
     /// Display-only properties are excluded from JSONL export/copy.
     /// </summary>
-    public class PythonSpawnItem : INotifyPropertyChanged
+    public class SpawnItem : INotifyPropertyChanged
     {
         private bool _exited;
         private int _flowCount;
@@ -36,7 +36,7 @@ namespace AutoCommand.Models
         /// Null when the spawn has no launcher in front of it.
         /// </summary>
         [JsonIgnore]
-        public PythonSpawnItem VenvLauncher { get; private set; }
+        public SpawnItem VenvLauncher { get; private set; }
 
         /// <summary>True when this row was absorbed into a child row as the venv launcher.</summary>
         public bool IsAbsorbedLauncher { get; private set; }
@@ -47,7 +47,7 @@ namespace AutoCommand.Models
         /// <summary>Set by the watcher when another python launch absorbed this row as its launcher.</summary>
         public void MarkAbsorbedLauncher() { IsAbsorbedLauncher = true; OnPropertyChanged(nameof(Badge)); }
 
-        public void SetVenvLauncher(PythonSpawnItem launcher)
+        public void SetVenvLauncher(SpawnItem launcher)
         {
             VenvLauncher = launcher;
             OnPropertyChanged(nameof(Badge));
@@ -60,13 +60,25 @@ namespace AutoCommand.Models
         }
 
         /// <summary>Grid badge: "venv" for a paired interpreter, "py→py" for python-spawned-python.</summary>
+        private string _detailBadge;
+
+        /// <summary>
+        /// View-set badge (e.g. the scheduled-task name on a taskhostw row);
+        /// the python-specific badges take precedence when present.
+        /// </summary>
+        public void SetDetailBadge(string badge)
+        {
+            _detailBadge = badge;
+            OnPropertyChanged(nameof(Badge));
+        }
+
         public string Badge
         {
             get
             {
                 if (VenvLauncher != null) return "venv";
                 if (HasPythonParent) return "py→py";
-                return string.Empty;
+                return _detailBadge ?? string.Empty;
             }
         }
 
