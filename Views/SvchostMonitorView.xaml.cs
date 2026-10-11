@@ -456,17 +456,26 @@ namespace AutoCommand.Views
 
         private void TracePidBtn_Click(object sender, RoutedEventArgs e)
         {
-            // Accepts both a bare PID and a picked "1234 · name" entry
+            // Accepts both a bare PID and a picked "1234 · name" entry; with
+            // nothing typed or picked, falls back to the selected row so the
+            // button does the obvious thing instead of demanding input.
             string text = (PidCombo.Text ?? string.Empty).Trim();
             int len = 0;
             while (len < text.Length && char.IsDigit(text[len])) len++;
-            if (len == 0 || !int.TryParse(text.AsSpan(0, len), out int pid) || pid < 0)
+            if (len > 0 && int.TryParse(text.AsSpan(0, len), out int pid) && pid >= 0)
             {
-                MessageBox.Show("Enter or pick a PID first — e.g. 20264 (the '1234 · name' dropdown entries work too).",
-                    "PID Inquiry", MessageBoxButton.OK, MessageBoxImage.Information);
+                OpenPidTrace(pid, _uiCollection.FirstOrDefault(i => i.ProcessId == pid));
                 return;
             }
-            OpenPidTrace(pid, _uiCollection.FirstOrDefault(i => i.ProcessId == pid));
+
+            if (SvchostGrid.SelectedItem is SvchostMonitorItem row && row.ProcessId > 0)
+            {
+                OpenPidTrace(row.ProcessId, row);
+                return;
+            }
+
+            MessageBox.Show("Enter or pick a PID first — e.g. 20264 (the '1234 · name' dropdown entries work too) — or select a row and press Trace.",
+                "PID Inquiry", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         /// <summary>
