@@ -36,6 +36,11 @@ namespace AutoCommand.Views
         private readonly List<BlockedEntry> _blockedEntries = new();
         private readonly string _blockedPath = "blocked.txt";
 
+        // High-transmitter threshold in bytes, persisted in tx_threshold.txt
+        private long _txThreshold = 1024;
+        private readonly string _txThresholdPath = "tx_threshold.txt";
+        private bool _loadingThreshold = true;
+
         // Scheduled-task attribution for taskhostw rows (who/what/why launched)
         private readonly TaskAttributionService _taskAttribution = new();
 
@@ -48,15 +53,20 @@ namespace AutoCommand.Views
             // setter raises PropertyChanged on every packet, and live sorting
             // repositions that row at the top. The Remote IP tiebreaker keeps
             // equal-timestamp rows in a stable order instead of reshuffling.
+            // High transmitters sort ahead of everything (the red-pinned
+            // heavy talkers), still most-recent-first within their group.
             // (ListCollectionView implements ICollectionViewLiveShaping
             // explicitly, so the shaping members need the interface cast.)
             if (CollectionViewSource.GetDefaultView(_uiCollection) is ICollectionViewLiveShaping liveShaping)
             {
+                liveShaping.LiveSortingProperties.Add(nameof(SvchostMonitorItem.IsHighTransmitter));
                 liveShaping.LiveSortingProperties.Add(nameof(SvchostMonitorItem.LastSeen));
                 liveShaping.IsLiveSorting = true;
             }
             if (CollectionViewSource.GetDefaultView(_uiCollection) is ListCollectionView view)
             {
+                view.SortDescriptions.Add(new SortDescription(
+                    nameof(SvchostMonitorItem.IsHighTransmitter), ListSortDirection.Descending));
                 view.SortDescriptions.Add(new SortDescription(
                     nameof(SvchostMonitorItem.LastSeen), ListSortDirection.Descending));
                 view.SortDescriptions.Add(new SortDescription(
@@ -91,6 +101,7 @@ namespace AutoCommand.Views
             RefreshIgnoredUi();
             LoadBlockedEntries();
             RefreshBlockedUi();
+            LoadTxThreshold();
 
             // Setup auto-save every 1 hour
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
@@ -112,6 +123,7 @@ namespace AutoCommand.Views
                     EnrichWithTaskInfo(item);
 
                 DnsCacheChip.Text = $"DNS cache: {_dnsService.CacheCount} entries";
+                UpdateHighTxChip();
             };
             _lastSeenRefreshTimer.Start();
 
@@ -225,6 +237,70 @@ namespace AutoCommand.Views
             if (_sysmonService != null)
                 _sysmonService.FilterKnownCloudIps = HideCloudCheck.IsChecked == true;
         }
+
+        // -----------------------------------------------------------------------
+        // High-transmitter threshold (pinned + tinted rows at/above it)
+        // -----------------------------------------------------------------------
+
+        private void LoadTxThreshold()
+        {
+            try
+            {
+                if (File.Exists(_txThresholdPath) &&
+                    long.TryParse(File.ReadAllText(_txThresholdPath).Trim(), out long bytes) &&
+                    bytes >= 0)
+                {
+                    _txThreshold = bytes;
+                }
+            }
+            catch { /* first run or unreadable file — keep the 1 KB default */ }
+
+            SvchostMonitorItem.TxThresholdBytes = _txThreshold;
+
+            // Reflect the byte value in the number/unit controls
+            long unit = _txThreshold >= 1048576 ? 1048576 : _txThreshold >= 1024 ? 1024 : 1;
+            TxUnitCombo.SelectionChanged -= TxThreshold_Changed;
+            foreach (var item in TxUnitCombo.Items.OfType<ComboBoxItem>())
+                if (item.Tag is string tag && long.Parse(tag) == unit) item.IsSelected = true;
+            TxUnitCombo.SelectionChanged += TxThreshold_Changed;
+            TxThresholdBox.Text = (_txThreshold / unit).ToString();
+            UpdateHighTxChip();
+            _loadingThreshold = false;
+        }
+
+        private void TxThreshold_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_loadingThreshold) return;
+
+            if (!long.TryParse(TxThresholdBox.Text.Trim(), out long value) || value < 0)
+                return; // mid-typing or invalid — keep the last valid threshold
+
+            long unit = 1;
+            if (TxUnitCombo.SelectedItem is ComboBoxItem unitItem && unitItem.Tag is string tag)
+                long.TryParse(tag, out unit);
+
+            _txThreshold = value * unit;
+            SvchostMonitorItem.TxThresholdBytes = _txThreshold;
+            try { File.WriteAllText(_txThresholdPath, _txThreshold.ToString()); }
+            catch { /* persistence is best-effort — the live threshold still applies */ }
+
+            // Re-sort immediately: live sorting reacts to per-row changes,
+            // not to the shared threshold moving under them
+            CollectionViewSource.GetDefaultView(_uiCollection).Refresh();
+            UpdateHighTxChip();
+        }
+
+        private void UpdateHighTxChip()
+        {
+            int count = 0;
+            foreach (var item in _uiCollection)
+                if (item.IsHighTransmitter) count++;
+            HighTxCountText.Text = $"High TX: {count} ≥ {FormatThreshold(_txThreshold)}";
+        }
+
+        private static string FormatThreshold(long bytes) =>
+            bytes >= 1048576 ? $"{bytes / 1048576.0:0.#} MB" :
+            bytes >= 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes} B";
 
         private void ShowError(string msg)
         {

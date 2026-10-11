@@ -36,14 +36,32 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="MonitorStatusText" Text="Monitor is stopped." Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                <!-- High-transmitter threshold chip: rows at/above this TX
+                     volume pin to the top of the grid and get tinted. -->
+                <Border Grid.Column="1" Background="#3A2A14" CornerRadius="10" Padding="10,3" Margin="0,0,12,0" VerticalAlignment="Center"
+                        ToolTip="Rows whose transmitted volume reaches this threshold are pinned to the top of the grid and tinted red — the heavy talkers separate themselves from the noise. Change the number or unit anytime; remembered across launches.">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="HighTxCountText" Text="High TX: 0 ≥ 1 KB"
+                                   Foreground="#E5C77B" FontSize="11" FontFamily="Consolas" VerticalAlignment="Center"/>
+                        <TextBox x:Name="TxThresholdBox" Width="44" Margin="8,0,0,0" Padding="2" FontFamily="Consolas" FontSize="11"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource BorderBrush}" TextChanged="TxThreshold_Changed"/>
+                        <ComboBox x:Name="TxUnitCombo" Width="58" Margin="4,0,0,0" FontSize="11" SelectionChanged="TxThreshold_Changed">
+                            <ComboBoxItem Content="B" Tag="1"/>
+                            <ComboBoxItem Content="KB" Tag="1024" IsSelected="True"/>
+                            <ComboBoxItem Content="MB" Tag="1048576"/>
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
                 <!-- DNS cache counter chip -->
-                <Border Grid.Column="1" Background="#1A4A8A" CornerRadius="10" Padding="10,3" Margin="0,0,12,0" VerticalAlignment="Center">
+                <Border Grid.Column="2" Background="#1A4A8A" CornerRadius="10" Padding="10,3" Margin="0,0,12,0" VerticalAlignment="Center">
                     <TextBlock x:Name="DnsCacheChip" Text="DNS cache: 0 entries"
                                Foreground="#7EB8F7" FontSize="11" FontFamily="Consolas"/>
                 </Border>
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <StackPanel Grid.Column="3" Orientation="Horizontal">
                     <CheckBox x:Name="HideCloudCheck" Content="Hide Known/Cloud IPs" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" Checked="Filter_Changed" Unchecked="Filter_Changed"/>
                     <!-- PID inquiry: pick any PID shown below (or type one) and
                          trace how it was spawned — same engine as the row
@@ -105,10 +123,14 @@
         <DataGrid Grid.Row="2" x:Name="SvchostGrid" SelectionMode="Single"
                   PreviewMouseRightButtonDown="SvchostGrid_PreviewMouseRightButtonDown">
             <DataGrid.RowStyle>
-                <!-- Rows with no traffic for 5+ minutes fade into the background so
-                     active conversations stand out. -->
+                <!-- High transmitters tint red and pin to the top (live
+                     sorting); rows with no traffic for 5+ minutes fade into
+                     the background so active conversations stand out. -->
                 <Style TargetType="DataGridRow">
                     <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsHighTransmitter}" Value="True">
+                            <Setter Property="Background" Value="#33E5534B"/>
+                        </DataTrigger>
                         <DataTrigger Binding="{Binding IsStale}" Value="True">
                             <Setter Property="Opacity" Value="0.45"/>
                         </DataTrigger>

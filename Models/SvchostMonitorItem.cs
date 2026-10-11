@@ -114,8 +114,18 @@ namespace AutoCommand.Models
         public long TxBytes
         {
             get => _txBytes;
-            set { _txBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(TxBytesDisplay)); }
+            set { _txBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(TxBytesDisplay)); OnPropertyChanged(nameof(IsHighTransmitter)); }
         }
+
+        /// <summary>
+        /// Transmit threshold shared by every row: above it a row counts as a
+        /// high transmitter (pinned to the top of the grid, tinted). User-
+        /// changeable from the monitor toolbar; default 1 KB.
+        /// </summary>
+        public static long TxThresholdBytes = 1024;
+
+        /// <summary>True while this row's transmit volume is at or above the high-transmitter threshold.</summary>
+        public bool IsHighTransmitter => TxBytes >= TxThresholdBytes;
 
         public string RxBytesDisplay => FormatBytes(RxBytes);
         public string TxBytesDisplay => FormatBytes(TxBytes);
