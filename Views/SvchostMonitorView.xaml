@@ -143,7 +143,7 @@
                 <DataGridTextColumn Header="Last Update" Binding="{Binding LastSeenDisplay}"
                                     SortMemberPath="LastSeen" Width="100"/>
                 <DataGridTextColumn Header="Tx Pkts"    Binding="{Binding TxPackets}"      Width="80"/>
-                <DataGridTextColumn Header="Rx Pkts"    Binding="{Binding RxPackets}"      Width="80"/>
+                <DataGridTextColumn Header="Tx Bytes"   Binding="{Binding TxBytesDisplay}" Width="90"/>
                 <DataGridTextColumn Header="Remote IP"   Binding="{Binding RemoteIp}"        Width="120"/>
                 <!-- Host column: dims + italicises cells that are still resolving -->
                 <DataGridTemplateColumn Header="Host" Width="220">
@@ -166,8 +166,8 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Rx Pkts"    Binding="{Binding RxPackets}"      Width="80"/>
                 <DataGridTextColumn Header="Rx Bytes"   Binding="{Binding RxBytesDisplay}" Width="90"/>
-                <DataGridTextColumn Header="Tx Bytes"   Binding="{Binding TxBytesDisplay}" Width="90"/>
             </DataGrid.Columns>
         </DataGrid>
     </Grid>
