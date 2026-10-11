@@ -432,7 +432,14 @@ namespace AutoCommand.Views
             RenderPlainText();
         }
 
-        private void PlainViewCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RenderPlainText();
+        private void PlainViewCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // SelectedIndex="0" makes WPF select the first item during
+            // InitializeComponent — before the PlainText textbox later in the
+            // XAML exists. Bail out until the view is fully parsed.
+            if (PlainText == null || StackText == null) return;
+            RenderPlainText();
+        }
 
         private void RenderPlainText()
         {
