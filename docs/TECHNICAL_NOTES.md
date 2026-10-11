@@ -118,6 +118,7 @@ How AutoCommand delivers what the [README](../README.md) promises: the technolog
 | `sslkeys.log` (+ `.old` while rotating) | TLS session keys written by instrumented pythons via `SSLKEYLOGFILE`; created with a current-user-only ACL, rotated at 5 MB, `.old` deleted at app exit |
 | `no-keylog` | Flag file: the "Disable TLS keylogging" toggle — its presence makes the hook stop setting `SSLKEYLOGFILE` |
 | `instrumented.json` | Manifest of python environments the audit hook was installed into (and the exact files written) |
+| `env_scan.json` | Instrumentation discovery state: user-added scan roots, environments deliberately forgotten, last deep-scan time |
 | `settings.json` | Tab settings (keylog toggle state, flow persistence, flow caps) |
 | `flows\*.jsonl` | Optional persisted TCP flows (base64 payloads, off by default, rotated by budget) |
 

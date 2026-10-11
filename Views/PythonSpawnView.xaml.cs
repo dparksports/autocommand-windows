@@ -261,7 +261,9 @@ namespace AutoCommand.Views
 
         private void InstrumentBtn_Click(object sender, RoutedEventArgs e)
         {
-            var dialog = new PythonInstrumentDialog { Owner = Window.GetWindow(this) };
+            // The watcher feeds passive discovery: every python image actually
+            // seen spawning becomes an offer in the dialog's list.
+            var dialog = new PythonInstrumentDialog(_watcher) { Owner = Window.GetWindow(this) };
             dialog.ShowDialog();
             LoadSettings(); // the keylog flag may have been toggled elsewhere
         }

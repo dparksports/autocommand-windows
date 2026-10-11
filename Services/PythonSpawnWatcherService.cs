@@ -43,6 +43,21 @@ namespace AutoCommand.Services
 
         public int TrackedCount { get { lock (_trackedLock) return _tracked.Count; } }
 
+        /// <summary>
+        /// Distinct python image paths seen spawning — the passive discovery
+        /// feed for the instrumentation dialog (every python that actually
+        /// ran on this machine, wherever it lives).
+        /// </summary>
+        public List<string> GetSeenImages()
+        {
+            lock (_trackedLock)
+                return _tracked.Values
+                    .Select(i => i.Image)
+                    .Where(img => !string.IsNullOrEmpty(img))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+        }
+
         public void Start()
         {
             try

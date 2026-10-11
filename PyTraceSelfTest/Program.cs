@@ -6,6 +6,7 @@
 //   tls <client.bin> <server.bin> <keylog-dir>   real captured TLS streams → plaintext
 
 using System.Net;
+using System.Threading;
 using System.Text;
 using AutoCommand.Models;
 using AutoCommand.Services;
@@ -196,8 +197,39 @@ namespace PyTraceSelfTest
             {
                 "reassemble" => TestReassembly(),
                 "sweep12" => DebugSweep12(args),
+                "discover" => Discover(args),
                 _ => TestTlsDecrypt(args)
             };
+        }
+
+        // -----------------------------------------------------------------------
+        // Environment discovery (debug): print every python the installer
+        // service finds on this machine, tier 1 + a bounded venv scan.
+        // -----------------------------------------------------------------------
+
+        private static int Discover(string[] args)
+        {
+            if (args.Length > 1) TlsKeylogService.DirOverride = args[1];
+            var installer = new PyTraceInstallerService();
+
+            Console.WriteLine("=== Tier 1: registry / PATH / Store / conda / uv / pyenv-win / scoop / choco ===");
+            var tier1 = installer.DiscoverEnvironments();
+            foreach (var env in tier1)
+                Console.WriteLine($"  [{env.Source,-12}] {(env.CanInstrument ? "ok  " : "NO  ")} {env.Root}  ->  {env.SitePackages}");
+
+            Console.WriteLine();
+            Console.WriteLine("=== Tier 2: bounded pyvenv.cfg scan ===");
+            var roots = installer.GetScanRoots();
+            Console.WriteLine($"  roots: {string.Join(", ", roots)}");
+            int found = 0;
+            PyTraceInstallerService.ScanForVenvs(roots, maxDepth: 6, maxDirectories: 100_000,
+                env =>
+                {
+                    Interlocked.Increment(ref found);
+                    Console.WriteLine($"  [{env.Source}] {env.Root}");
+                }, CancellationToken.None);
+            Console.WriteLine($"\nDISCOVER: tier1={tier1.Count}, tier2={found}");
+            return 0;
         }
 
         // -----------------------------------------------------------------------
