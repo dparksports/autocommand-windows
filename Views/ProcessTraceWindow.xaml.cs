@@ -104,7 +104,7 @@ namespace AutoCommand.Views
             ChainList.ItemsSource = rows;
 
             EvidenceList.ItemsSource = r.Evidence
-                .Select(ev => new { Source = ev.Source, Detail = ev.Detail })
+                .Select(ev => new EvidenceRowVm { Source = ev.Source, Detail = ev.Detail })
                 .ToList();
 
             WarningsText.Text = r.Warnings.Count == 0
@@ -169,6 +169,17 @@ namespace AutoCommand.Views
             public string Cmd { get; set; }
             public string Note { get; set; }
             public bool Verified { get; set; } = true;
+        }
+
+        /// <summary>
+        /// Display row for one evidence record. A named class (not an
+        /// anonymous type): Run.Text bindings evaluate TwoWay by default and
+        /// throw on read-only properties.
+        /// </summary>
+        private sealed class EvidenceRowVm
+        {
+            public string Source { get; set; }
+            public string Detail { get; set; }
         }
     }
 }

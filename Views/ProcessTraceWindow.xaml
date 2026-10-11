@@ -100,9 +100,11 @@
                         <DataTemplate>
                             <StackPanel Margin="0,3">
                                 <TextBlock FontFamily="Consolas" FontSize="11" TextWrapping="Wrap">
-                                    <Run Text="{Binding Source}" FontWeight="SemiBold" Foreground="#7EB8F7"/>
+                                    <!-- Mode=OneWay is required: Run.Text bindings default
+                                         to TwoWay, which throws on read-only VM properties. -->
+                                    <Run Text="{Binding Source, Mode=OneWay}" FontWeight="SemiBold" Foreground="#7EB8F7"/>
                                     <Run Text=" — "/>
-                                    <Run Text="{Binding Detail}"/>
+                                    <Run Text="{Binding Detail, Mode=OneWay}"/>
                                 </TextBlock>
                             </StackPanel>
                         </DataTemplate>
