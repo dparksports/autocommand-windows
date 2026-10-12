@@ -33,6 +33,16 @@
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Width="160" Margin="0,10">
+                        <TextBlock Text="📊" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                        <TextBlock Text="Traffic Patterns" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:TrafficPatternsView x:Name="TrafficPatternsTab"/>
+            </TabItem>
+
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Width="160" Margin="0,10">
                         <TextBlock Text="🛡" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
                         <TextBlock Text="Firewall" HorizontalAlignment="Center"/>
                     </StackPanel>
@@ -88,16 +98,6 @@
                     </StackPanel>
                 </TabItem.Header>
                 <views:ConnectionsView x:Name="ConnectionsTab"/>
-            </TabItem>
-
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="📊" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Traffic Patterns" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <views:TrafficPatternsView x:Name="TrafficPatternsTab"/>
             </TabItem>
 
             <TabItem>

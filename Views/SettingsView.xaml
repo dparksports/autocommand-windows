@@ -16,34 +16,6 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                
-                <!-- Application Information -->
-                <Border Style="{StaticResource CardPanel}">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        
-                        <TextBlock Text="Application Information" Style="{StaticResource SectionHeader}"/>
-                        
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                            <TextBlock Text="Version:" Foreground="{DynamicResource TextSecondaryBrush}" Width="150" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="VersionValueText" Text="…" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        </StackPanel>
-                        
-                        <!-- Footnote -->
-                        <StackPanel Grid.Row="2" Margin="0,16,0,0">
-                            <TextBlock Text="Made with ❤️ in California"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
-                            <TextBlock Text="Apache License 2.0" Margin="0,10,0,0"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
-                            <TextBlock Text="© 2026 Dan Park, magicpoint.ai" Margin="0,10,0,0"
-                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" FontWeight="SemiBold"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
 
                 <!-- Unblock (SmartScreen / Smart App Control) -->
                 <Border Style="{StaticResource CardPanel}">
@@ -191,6 +163,34 @@
                         
                         <TextBlock Grid.Row="2" Text="Sends basic usage events (like app opens) to Firebase/Google Analytics using the Measurement Protocol. No personal or identifiable data is collected."
                                    Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+
+                <!-- Application Information -->
+                <Border Style="{StaticResource CardPanel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="Application Information" Style="{StaticResource SectionHeader}"/>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                            <TextBlock Text="Version:" Foreground="{DynamicResource TextSecondaryBrush}" Width="150" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="VersionValueText" Text="…" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <!-- Footnote -->
+                        <StackPanel Grid.Row="2" Margin="0,16,0,0">
+                            <TextBlock Text="Made with ❤️ in California"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
+                            <TextBlock Text="Apache License 2.0" Margin="0,10,0,0"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
+                            <TextBlock Text="© 2026 Dan Park, magicpoint.ai" Margin="0,10,0,0"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" FontWeight="SemiBold"/>
+                        </StackPanel>
                     </Grid>
                 </Border>
 
