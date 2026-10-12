@@ -100,12 +100,12 @@ namespace AutoCommand.Services
                         new SetupStep
                         {
                             Id = "firewall",
-                            Title = "Firewall: Shield Up profile",
+                            Title = "Firewall: Shields Up + mDNS profile",
                             Description = "Disables every grouped firewall rule, then re-enables only the whitelists (mDNS, Core Networking).",
                             Apply = async progress =>
                             {
                                 var result = await FirewallProfileService.Instance.ApplyProfile(
-                                    FirewallProfileService.ProfileType.ShieldUp, progress);
+                                    FirewallProfileService.ProfileType.ShieldsUpMdns, progress);
                                 return (true, $"Applied — {result.TotalChanged} rule(s) changed, {result.TotalFailed} failed");
                             },
                             Verify = async () =>

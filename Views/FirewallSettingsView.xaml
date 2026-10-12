@@ -31,15 +31,16 @@
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="Quick Profile:" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox x:Name="ProfileCombo" Width="140" Margin="0,0,8,0" SelectionChanged="ProfileCombo_SelectionChanged">
+                <ComboBox x:Name="ProfileCombo" Width="340" Margin="0,0,8,0" SelectionChanged="ProfileCombo_SelectionChanged">
                     <ComboBoxItem Content="Custom (Current)" IsSelected="True"/>
-                    <ComboBoxItem Content="Default Lockdown"
-                                  ToolTip="Reset Windows Firewall to its default rule set (removes all custom rules, including AutoCommand's AC-BLOCK rules), then disable every inbound and outbound rule for a total lockdown."/>
-                    <ComboBoxItem Content="Shield Up"/>
-                    <ComboBoxItem Content="Gaming"/>
-                    <ComboBoxItem Content="Office"/>
-                    <ComboBoxItem Content="Home"/>
-                    <ComboBoxItem Content="Public Strict"/>
+                    <ComboBoxItem Content="Shields Up"
+                                  ToolTip="Reset Windows Firewall to its default rule set (removes all custom rules, including AutoCommand's AC-BLOCK rules), then disable every remaining rule — blocks all unsolicited incoming traffic."/>
+                    <ComboBoxItem Content="Shields Up + mDNS"
+                                  ToolTip="Disables every grouped firewall rule, then re-enables only mDNS and Core Networking."/>
+                    <ComboBoxItem Content="Allow Discovery + Cast"/>
+                    <ComboBoxItem Content="Allow Sharing + Discovery + Remote Desktop"/>
+                    <ComboBoxItem Content="Allow Sharing + Discovery"/>
+                    <ComboBoxItem Content="Block Sharing + Discovery + Remote Desktop"/>
                 </ComboBox>
                 <Button x:Name="RefreshBtn" Content="↻ Refresh" Style="{StaticResource PrimaryButton}" Click="RefreshBtn_Click"/>
             </StackPanel>

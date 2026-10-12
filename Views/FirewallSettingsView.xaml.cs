@@ -179,17 +179,18 @@ namespace AutoCommand.Views
 
             string profileName = ((ComboBoxItem)ProfileCombo.SelectedItem).Content.ToString();
 
-            if (profileName == "Default Lockdown")
+            if (profileName == "Shields Up")
             {
                 // Far more destructive than the other profiles — spell out both steps
                 const string warning =
-                    "Default Lockdown performs two destructive steps:\n\n" +
+                    "Shields Up performs two destructive steps:\n\n" +
                     "1. RESET TO DEFAULTS — every non-default rule is deleted, including\n" +
                     "    custom rules and AutoCommand's own AC-BLOCK rules.\n" +
-                    "2. LOCKDOWN — every inbound and outbound rule is then disabled, cutting\n" +
-                    "    off all network and Internet access until rules are re-enabled.\n\n" +
+                    "2. LOCKDOWN — every inbound and outbound rule is then disabled: all\n" +
+                    "    unsolicited incoming traffic is blocked. Outbound traffic may still\n" +
+                    "    flow depending on your firewall profile's default actions.\n\n" +
                     "Apply this profile?";
-                if (MessageBox.Show(warning, "Confirm Default Lockdown",
+                if (MessageBox.Show(warning, "Confirm Shields Up",
                     MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
                 {
                     ProfileCombo.SelectedIndex = 0; // Reset to Custom
@@ -206,12 +207,12 @@ namespace AutoCommand.Views
             FirewallProfileService.ProfileType type;
             switch (profileName)
             {
-                case "Shield Up": type = FirewallProfileService.ProfileType.ShieldUp; break;
-                case "Gaming": type = FirewallProfileService.ProfileType.GamingMedia; break;
-                case "Office": type = FirewallProfileService.ProfileType.Office; break;
-                case "Home": type = FirewallProfileService.ProfileType.HomeTrusted; break;
-                case "Public Strict": type = FirewallProfileService.ProfileType.StrictPublic; break;
-                case "Default Lockdown": type = FirewallProfileService.ProfileType.DefaultLockdown; break;
+                case "Shields Up + mDNS": type = FirewallProfileService.ProfileType.ShieldsUpMdns; break;
+                case "Allow Discovery + Cast": type = FirewallProfileService.ProfileType.AllowDiscoveryCast; break;
+                case "Allow Sharing + Discovery + Remote Desktop": type = FirewallProfileService.ProfileType.AllowSharingDiscoveryRemoteDesktop; break;
+                case "Allow Sharing + Discovery": type = FirewallProfileService.ProfileType.AllowSharingDiscovery; break;
+                case "Block Sharing + Discovery + Remote Desktop": type = FirewallProfileService.ProfileType.BlockSharingDiscoveryRemoteDesktop; break;
+                case "Shields Up": type = FirewallProfileService.ProfileType.ShieldsUp; break;
                 default:
                     ProfileCombo.SelectedIndex = 0;
                     return;
@@ -245,7 +246,7 @@ namespace AutoCommand.Views
                 if (!string.IsNullOrEmpty(result.Notes)) sb.AppendLine(result.Notes);
                 foreach (var g in result.Groups)
                 {
-                    if (g.GroupName == "Shield Up (block all)" || g.GroupName == "Lockdown (reset to defaults)")
+                    if (g.GroupName == "Shields Up + mDNS (block all)" || g.GroupName == "Lockdown (reset to defaults)")
                         continue; // Covered by the Notes line
                     sb.AppendLine($"• {g.GroupName}: {g.Matched} matched, {g.Changed} changed"
                                   + (g.Failed > 0 ? $", {g.Failed} FAILED" : ""));

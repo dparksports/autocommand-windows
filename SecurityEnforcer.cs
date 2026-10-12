@@ -258,7 +258,7 @@ namespace AutoCommand
                                 fixedCount += await Helpers.FirewallBaselineManager.RestoreEnableAsync(drift.UnexpectedlyDisabled);
 
                             // New rules: grouped ones violate the applied profile's end
-                            // state (e.g. Shield Up) — block those; ungrouped ones are
+                            // state (e.g. Shields Up) — block those; ungrouped ones are
                             // reported for review instead of being touched.
                             var groupedSneaks = drift.SneakedIn
                                 .Where(s => !string.IsNullOrEmpty(s.Item2))

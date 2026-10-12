@@ -30,12 +30,12 @@ namespace AutoCommand.Services
         public enum ProfileType
         {
             Custom,
-            StrictPublic,
-            HomeTrusted,
-            GamingMedia,
-            ShieldUp,
-            Office,
-            DefaultLockdown
+            BlockSharingDiscoveryRemoteDesktop,
+            AllowSharingDiscovery,
+            AllowDiscoveryCast,
+            ShieldsUpMdns,
+            AllowSharingDiscoveryRemoteDesktop,
+            ShieldsUp
         }
 
         public async Task<ProfileApplyResult> ApplyProfile(ProfileType profile, IProgress<string> progress = null)
@@ -44,23 +44,23 @@ namespace AutoCommand.Services
 
             switch (profile)
             {
-                case ProfileType.StrictPublic:
+                case ProfileType.BlockSharingDiscoveryRemoteDesktop:
                     await Toggle(result, progress, "File and Printer Sharing", false);
                     await Toggle(result, progress, "Network Discovery", false);
                     await Toggle(result, progress, "Remote Desktop", false);
                     break;
-                case ProfileType.HomeTrusted:
+                case ProfileType.AllowSharingDiscovery:
                     await Toggle(result, progress, "File and Printer Sharing", true);
                     await Toggle(result, progress, "Network Discovery", true);
                     break;
-                case ProfileType.GamingMedia:
+                case ProfileType.AllowDiscoveryCast:
                     await Toggle(result, progress, "Network Discovery", true);
                     await Toggle(result, progress, "Cast to Device functionality", true);
                     break;
-                case ProfileType.ShieldUp:
+                case ProfileType.ShieldsUpMdns:
                 {
-                    progress?.Report("Shield Up: disabling all grouped rules…");
-                    var shield = await ApplyShieldUp();
+                    progress?.Report("Shields Up + mDNS: disabling all grouped rules…");
+                    var shield = await ApplyShieldsUpMdns();
                     result.Groups.Add(shield);
                     result.TotalMatched += shield.Matched;
                     result.TotalChanged += shield.Changed;
@@ -69,14 +69,14 @@ namespace AutoCommand.Services
                     result.Notes = shield.Notes;
                     break;
                 }
-                case ProfileType.Office:
+                case ProfileType.AllowSharingDiscoveryRemoteDesktop:
                     await Toggle(result, progress, "File and Printer Sharing", true);
                     await Toggle(result, progress, "Network Discovery", true);
                     await Toggle(result, progress, "Remote Desktop", true);
                     break;
-                case ProfileType.DefaultLockdown:
+                case ProfileType.ShieldsUp:
                 {
-                    progress?.Report("Default Lockdown: restoring Windows defaults…");
+                    progress?.Report("Shields Up: restoring Windows defaults…");
                     var lockdown = await FirewallService.Instance.ResetToDefaultsAndLockdownAsync(progress);
                     result.Groups.Add(lockdown);
                     result.TotalMatched += lockdown.Matched;
@@ -102,12 +102,12 @@ namespace AutoCommand.Services
             if (r.FirstError != null && acc.FirstError == null) acc.FirstError = r.FirstError;
         }
 
-        private Task<FirewallService.GroupToggleResult> ApplyShieldUp()
+        private Task<FirewallService.GroupToggleResult> ApplyShieldsUpMdns()
         {
             // Disable ALL rules, then re-enable whitelisted groups
             return Task.Run(() =>
             {
-                var result = new FirewallService.GroupToggleResult { GroupName = "Shield Up (block all)" };
+                var result = new FirewallService.GroupToggleResult { GroupName = "Shields Up + mDNS (block all)" };
                 try
                 {
                     Type fwPolicyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
