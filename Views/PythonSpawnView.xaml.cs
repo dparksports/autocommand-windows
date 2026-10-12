@@ -74,7 +74,10 @@ namespace AutoCommand.Views
         {
             _watcher = new ImageSpawnWatcherService(ImageSpawnWatcherService.IsPythonImage, "python", venvPairing: true);
             _traceReader = new PyTraceReaderService();
-            _capture = new TcpStreamCaptureService();
+            // Shared app-level capture (one raw socket for the whole app,
+            // refcounted across tabs). Its settings (PersistFlows, budgets,
+            // idle timeout) are per-instance and therefore now app-wide.
+            _capture = TcpStreamCaptureService.Shared;
             _keylog = new TlsKeylogService();
 
             _watcher.OnError += ShowError;
@@ -95,7 +98,7 @@ namespace AutoCommand.Views
         {
             _watcher.Start();
             _traceReader.Start();
-            _capture.Start();
+            _capture.AddRef();
             _keylog.Refresh();
             _watching = true;
             ToggleWatchBtn.Content = "Stop Watch";
@@ -106,7 +109,7 @@ namespace AutoCommand.Views
         {
             _watcher.Stop();
             _traceReader.Stop();
-            _capture.Stop();
+            _capture.Release();
             _watching = false;
             ToggleWatchBtn.Content = "Start Watch";
             UpdateStatus();

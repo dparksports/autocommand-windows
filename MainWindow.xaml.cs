@@ -37,6 +37,13 @@ namespace AutoCommand
 
             InitializeEnforcer();
 
+            // App-level TCP capture + traffic aggregation: one raw socket
+            // shared by the Python Spawns and Traffic Patterns tabs; the
+            // aggregator runs whenever either captures and persists its
+            // (process → destination → bytes) history across sessions.
+            Services.TrafficAggregationService.Shared.Attach(Services.TcpStreamCaptureService.Shared);
+            Services.TrafficAggregationService.Shared.Start();
+
             // Fire telemetry app_open event (fire-and-forget)
             _ = TelemetryService.Instance.LogEventAsync("app_open", new Dictionary<string, object>
             {
@@ -180,6 +187,14 @@ namespace AutoCommand
         {
             _enforcer?.Stop();
             _trayNotifier?.Dispose();
+
+            // Stop the shared capture FIRST so live flows finalize into the
+            // aggregator, then persist that final state. (Content Unloaded
+            // events fire after OnClosed, so tab-level Release may follow —
+            // Stop is idempotent.)
+            Services.TcpStreamCaptureService.Shared.Stop();
+            Services.TrafficAggregationService.Shared.Shutdown();
+
             Services.TlsKeylogService.CleanupAtExit(); // drop the rotated TLS keylog leftover
             base.OnClosed(e);
         }

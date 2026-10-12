@@ -47,6 +47,38 @@ namespace AutoCommand.Services
 
         public int LiveFlowCount => _flows.Count;
 
+        // -----------------------------------------------------------------------
+        // App-level sharing
+        // -----------------------------------------------------------------------
+
+        private static readonly Lazy<TcpStreamCaptureService> _shared = new(() => new TcpStreamCaptureService());
+
+        /// <summary>
+        /// The app-level instance shared by every view that captures (Python
+        /// Spawns, Traffic Patterns) — one raw socket instead of one per tab.
+        /// Views hold it with AddRef/Release so it runs exactly while at least
+        /// one of them wants it; settings like IdleTimeout are per-instance,
+        /// so the last tab to load them configures the shared socket.
+        /// </summary>
+        public static TcpStreamCaptureService Shared => _shared.Value;
+
+        private int _refs;
+
+        /// <summary>Reference-counted start: the first holder starts the capture.</summary>
+        public void AddRef()
+        {
+            if (Interlocked.Increment(ref _refs) == 1)
+                Start();
+        }
+
+        /// <summary>Reference-counted stop: runs until the last holder releases.</summary>
+        public void Release()
+        {
+            int refs = Interlocked.Decrement(ref _refs);
+            if (refs == 0) Stop();
+            else if (refs < 0) Interlocked.Exchange(ref _refs, 0); // over-release guard
+        }
+
         public void Start()
         {
             if (Interlocked.Exchange(ref _running, 1) == 1) return;
