@@ -2,6 +2,8 @@
 
 How AutoCommand delivers what the [README](../README.md) promises: the technologies behind each capability, the design rules they follow, and every place on disk the app writes. No marketing — just what runs, what it touches, and why.
 
+> **Note (v2026.10.22):** the consumer tabs (Quick Scan, Attack Surface, Bloatware, Telemetry, Privacy, Update Control, Tasks, Startup, Hibernation, OS Hardening, DBX Safety) moved to [Shields Up](https://github.com/dparksports/shields-up/releases/latest) and were removed from the UI. Sections below that describe those features cover services that remain in the codebase but currently have no tab in the app.
+
 ---
 
 ## Design rules

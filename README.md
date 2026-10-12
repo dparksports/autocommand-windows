@@ -10,6 +10,8 @@ A free, open-source security and control dashboard for Windows 10 and 11. One ad
 
 ---
 
+> **🛡 Looking for the setup side?** The first-hour ritual — debloat, firewall presets, privacy opt-outs, OS hardening, update freezes — moved to its own app: [**Shields Up**](https://github.com/dparksports/shields-up/releases/latest) (same author, same undo-first design). AutoCommand stays what this README covers: the analyst toolkit.
+
 ## Why it exists
 
 Windows spreads the answers across a dozen tools that don't talk to each other. AutoCommand puts the whole picture in one place:
@@ -18,8 +20,8 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 
 - **A mystery process is phoning home.** Find the row — process, destination, owner — then block the IP, block the executable, kill the process, or disable the scheduled task that would resurrect it at 3 a.m.
 - **You want a record, not a guess.** One click installs Sysmon, and from then on every process launch, connection, and DNS query is recorded locally.
-- **An app keeps replacing itself.** Freeze it: the app runs, its updater fails politely, and unfreezing restores the original permissions exactly.
-- **Software silently beacons usage stats.** Apply the vendor's own documented opt-out, snapshot the previous value, and verify the beacons actually stopped.
+- **A task or script keeps spawning interpreters.** Python Spawns and Taskhostw Spawns show every `python.exe` / `taskhostw.exe` launch with full parentage — and for python environments you explicitly instrument, the call stack that fired the spawn and the decrypted TLS it sent.
+- **svchost.exe looks off.** A timeline over all 70+ service hosts with a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows.
 
 ---
 
@@ -27,23 +29,14 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 
 | Tab | What it gives you |
 |---|---|
-| 🚀 **Quick Scan** | The whole first-hour ritual — debloat, firewall, privacy, hardening — as one guided pass that re-verifies itself. |
-| 📡 **Attack Surface** | The network doors Windows ships open: SSTP tunneling, KDNET debug adapters, hosted-network hotspots. Inspect, disable, remove. |
+| 🔍 **Process Monitor** | Live grid of outbound connections with packet counters (no WinPcap needed), background reverse-DNS, and attribution that survives process exit. Block, kill, inspect — with warnings before you take out something Windows needs. Rows above a **user-set transmit threshold (1 KB default)** pin to the top tinted red, so heavy talkers separate themselves from the noise. Opens first. |
 | 🛡 **Firewall** | Curated profiles (lockdown, home-LAN, per-app) in one click over the native `INetFwPolicy2` engine, with drift detection. |
-| 📦 **Bloatware** | 23 preinstalled apps removed in one sweep. Use one of them? Toggle it off the list — permanently. |
 | 🧭 **Sysmon Audit** | One status card + a live feed of every process launch with full command line and parent. Installed and configured from the app. |
-| 🔍 **Process Monitor** | Live grid of outbound connections with packet counters (no WinPcap needed), background reverse-DNS, and attribution that survives process exit. Block, kill, inspect — with warnings before you take out something Windows needs. Rows above a **user-set transmit threshold (1 KB default)** pin to the top tinted red, so heavy talkers separate themselves from the noise. |
 | 🐍 **Python Spawns** | Every `python.exe` launch as it happens — who spawned it (parent image + command line), what it ran, when it exited. For environments you explicitly instrument: the **Python call stack at the moment a spawn API fired**, and **decrypted TLS plaintext** of what the process sent (SNI, HTTP request/response), from its own SSLKEYLOGFILE secrets + a NIC-level TCP capture. |
 | 🧵 **Taskhostw Spawns** | The same spawn tracing for `taskhostw.exe` — and the "why" is built in: each row resolves to the **scheduled task** that launched it (task path, user context, COM-handler DLL), with the full task summary and the PID-inquiry trace one click away. |
 | 🔬 **Svchost Trace** | A timeline over the 70+ `svchost.exe` service hosts — spawns with parents, connection lifetimes, byte flows — plus a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows. Exports JSONL; drives a headless capture service with boot auto-start. The capture engine is built into the app (no separate binary to install or unblock); an optional standalone SvchostAnalyzer.exe remains for headless 24/7 recording with boot auto-start — offered as a one-click SHA-256-verified install when you enable it. |
-| 📊 **Telemetry** | Known telemetry senders (Edge, Chrome, .NET CLI, VS Code, …), the vendor's own documented opt-out, previous value snapshotted, quiet verified via the DNS cache. |
-| 👁 **Privacy** | Microsoft's diagnostic task disabled, AutoCommand's own analytics opt-in, tamper-protection status visible. |
-| ❄ **Update Control** | Freeze self-updating apps at the version that works — `icacls` snapshots make unfreezing exact. Windows binaries are refused. |
-| 📋 **Tasks · 🚀 Startup · 🌙 Hibernation · 🌐 Connections** | Full Task Scheduler control, startup entries, hibernation posture, and a second live connection view. |
-| 🔒 **OS Hardening + ✅ DBX Safety** | Self-healing guards on SSTP/kernel-debug, the Secure Boot chain hashed and watched, DBX revocations applied only with your yes. |
+| 🌐 **Connections** | A second live connection view. |
 | ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, analytics opt-in, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
-
-![Quick Scan — one guided pass](Assets/corp_debloat.png?v=fluent1)
 
 ![Process Monitor and Sysmon Audit](Assets/corp_visibility.png?v=fluent1)
 
@@ -69,15 +62,11 @@ Blocking is easy; *un*-blocking is where other tools strand you. AutoCommand:
 - **verifies unknown IPs for you** — one button asks the internet registries (RDAP) who owns each target, cached machine-wide;
 - **restores you from mistakes** — the status-bar 🚑 button disables every AutoCommand block and flushes DNS in one click; *Restore except Microsoft/Windows* brings your real blocks back while leaving only the breakage-causing ones off.
 
-![Update Control and Telemetry](Assets/corp_control.png?v=fluent1)
-
 ## What AutoCommand will not do
 
-- **Nothing runs without you.** Removals, applies, freezes, and DBX updates all confirm first.
-- **Non-removable means non-offered.** System-signed components never appear in the bloatware list; Windows binaries are never frozen.
+- **Nothing runs without you.** Blocks, kills, and instrumentation installs all confirm first.
+- **Observational by default.** The spawn/connection tabs only watch; the invasive capabilities (call stacks, TLS plaintext) exist solely for python environments you explicitly instrument.
 - **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); its own telemetry is opt-in and off by default.
-
-![OS Hardening](Assets/corp_hardening.png?v=fluent1)
 
 ## Build from source
 

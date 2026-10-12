@@ -107,7 +107,7 @@ namespace AutoCommand
                 string msg = $"{_currentThreatDetails}\n\n" +
                              "This task is running with the highest system privileges. While some third-party updaters (like Edge or Chrome) do this legitimately, malware often uses it for persistence.\n\n" +
                              "Would you like to ignore this task permanently (Whitelist)?\n" +
-                             "Click 'No' to keep alerting, or go to the 'Tasks' tab to manually investigate and delete it.";
+                             "Click 'No' to keep alerting. To investigate or delete the task, use the Tasks page in Shields Up.";
                 
                 var result = MessageBox.Show(msg, "Review Threat", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning);
                 if (result == MessageBoxResult.Yes)
@@ -147,7 +147,7 @@ namespace AutoCommand
             }
             else
             {
-                MessageBox.Show($"{_currentThreatType}\n\n{_currentThreatDetails}\n\nPlease check the Attack Surface tab for more details.", "Security Alert", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show($"{_currentThreatType}\n\n{_currentThreatDetails}", "Security Alert", MessageBoxButton.OK, MessageBoxImage.Information);
                 ReviewAlertBtn.Visibility = Visibility.Collapsed;
             }
         }
