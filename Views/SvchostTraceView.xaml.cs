@@ -469,10 +469,10 @@ namespace AutoCommand.Views
         //
         // The headless SvchostAnalyzer.exe remains the opt-in boot-autostart
         // host (survives app close, starts at logon via an HKCU Run key,
-        // stops through the sentinel file) for 24/7 recording; it is NOT
-        // bundled with the app anymore — enabling autostart offers the
-        // SHA-256-verified install from the GitHub release. A killed trace
-        // is still valid JSONL (every event is its own appended line).
+        // stops through the sentinel file) for 24/7 recording. It is no longer
+        // distributed with the app or its releases; an already-installed copy
+        // keeps working. A killed trace is still valid JSONL (every event is
+        // its own appended line).
 
         // Boot auto-start uses an HKCU Run key rather than a scheduled task:
         // task creation is elevation-gated for standard users (schtasks caps
@@ -487,7 +487,7 @@ namespace AutoCommand.Views
             "AutoCommand", "captures");
         private static string StopFilePath => Path.Combine(CapturesDir, "stop.sentinel");
 
-        /// <summary>Where auto-install puts the capture engine (user-writable, no admin).</summary>
+        /// <summary>Where a previously auto-installed analyzer lives (user-writable, no admin).</summary>
         private static readonly string ToolsDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AutoCommand", "tools");
@@ -515,74 +515,6 @@ namespace AutoCommand.Views
                 candidates.Add(Path.Combine(dir!, "svchost-watch", "SvchostAnalyzer",
                                             "bin", "Debug", "net10.0", "SvchostAnalyzer.exe"));
             return candidates.FirstOrDefault(File.Exists);
-        }
-
-        /// <summary>
-        /// Auto-install the capture engine from the official GitHub release that
-        /// matches the running app version. SHA-256 is verified against the
-        /// SHA256SUMS.txt published alongside the asset before anything runs.
-        /// Returns the installed exe path, or null (reason surfaced via status).
-        /// </summary>
-        private async Task<string> DownloadCaptureToolAsync()
-        {
-            // ProductVersion (= InformationalVersion) matches the release tag
-            // exactly; AssemblyVersion alone lags when AssemblyInfo.cs drifts
-            string ver = "v" + (FileVersionInfo.GetVersionInfo(Environment.ProcessPath).ProductVersion ?? "unknown");
-            string baseUrl = $"https://github.com/dparksports/autocommand-windows/releases/download/{ver}";
-            string zipPath = Path.Combine(Path.GetTempPath(), "SvchostAnalyzer-win-x64.zip");
-            try
-            {
-                TraceStatusText.Text = "Downloading capture engine…";
-                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-
-                string zip = await http.GetStringAsync($"{baseUrl}/SHA256SUMS.txt");
-                string expected = zip
-                    .Split('\n').FirstOrDefault(l => l.Contains("SvchostAnalyzer-win-x64.zip"))
-                    ?.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-                if (string.IsNullOrEmpty(expected))
-                {
-                    MessageBox.Show("Checksum file on the release does not list the capture engine.\n" +
-                        $"Update manually from: {baseUrl.Replace("/download/", "/releases/tag/")}", "Auto-install");
-                    return null;
-                }
-
-                await using (var fs = File.Create(zipPath))
-                await using (var net = await http.GetStreamAsync($"{baseUrl}/SvchostAnalyzer-win-x64.zip"))
-                    await net.CopyToAsync(fs);
-
-                string actual = Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(zipPath)));
-                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                {
-                    MessageBox.Show($"SHA-256 mismatch — download aborted.\nExpected {expected[..16]}…\nGot      {actual[..16]}…\n\nThe file was not executed.", "Auto-install");
-                    File.Delete(zipPath);
-                    return null;
-                }
-
-                Directory.CreateDirectory(ToolsDir);
-                using var archive = System.IO.Compression.ZipFile.OpenRead(zipPath);
-                foreach (var entry in archive.Entries)
-                {
-                    if (string.IsNullOrEmpty(entry.Name)) continue; // skip directories
-                    string dest = Path.Combine(ToolsDir, entry.Name);
-                    using var es = File.Create(dest);
-                    using var zs = entry.Open();
-                    zs.CopyTo(es);
-                }
-                File.Delete(zipPath);
-
-                string exe = Path.Combine(ToolsDir, "SvchostAnalyzer.exe");
-                if (!File.Exists(exe)) throw new FileNotFoundException("archive did not contain SvchostAnalyzer.exe");
-                TraceStatusText.Text = $"Capture engine installed → {ToolsDir}";
-                return exe;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Auto-install failed:\n" + ex.Message +
-                    $"\n\nManual install: download SvchostAnalyzer-win-x64.zip from release {ver}\n" +
-                    $"and extract SvchostAnalyzer.exe into {ToolsDir}", "Auto-install");
-                return null;
-            }
         }
 
         private static string BootCommand(string exe) =>
@@ -687,19 +619,21 @@ namespace AutoCommand.Views
             _ = RefreshServiceStatusAsync();
         }
 
-        private async void AutoStartToggle_Changed(object sender, RoutedEventArgs e)
+        private void AutoStartToggle_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressAutoStartEvents) return;
             var exe = ResolveAnalyzerExe();
             if (exe == null)
             {
-                var choice = MessageBox.Show(
-                    "Boot auto-start needs the capture engine, which is not installed.\n" +
-                    "Download and install it automatically? (SHA-256 verified)", 
-                    "Auto-start", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (choice != MessageBoxResult.Yes) { ForceToggleOff(); return; }
-                exe = await DownloadCaptureToolAsync();
-                if (exe == null) { ForceToggleOff(); return; }
+                MessageBox.Show(
+                    "Boot auto-start needs the standalone SvchostAnalyzer.exe, which is no\n" +
+                    "longer distributed with AutoCommand releases.\n\n" +
+                    "If you installed it earlier, make sure the exe is still where the app\n" +
+                    "can find it: next to AutoCommand.exe, in a tools\\ folder beside it, or\n" +
+                    "in %LOCALAPPDATA%\\AutoCommand\\tools. An installed copy keeps working.",
+                    "Auto-start", MessageBoxButton.OK, MessageBoxImage.Information);
+                ForceToggleOff();
+                return;
             }
             try
             {

@@ -15,10 +15,14 @@
 #
 # Full release requires: clean working tree on master, release_notes_v<Version>.md
 # already written, and `gh` authenticated. Steps: bump csproj -> publish
-# self-contained win-x64 -> verify the exe reports the csproj version -> zip app +
-# analyzer -> SHA256SUMS.txt (both zips) -> confirm -> commit -> tag -> push ->
+# self-contained win-x64 -> verify the exe reports the csproj version -> zip app
+# -> SHA256SUMS.txt (app zip + unblock script) -> confirm -> commit -> tag -> push ->
 # gh release create. If it dies mid-run after the bump, the csproj is left
 # modified - fix and re-run.
+#
+# The standalone SvchostAnalyzer.exe is not built or shipped anymore; the app
+# traces in-process via SvchostAnalyzer.Core. The headless boot-autostart host
+# is not distributed - already-installed copies keep working.
 
 [CmdletBinding()]
 param(
@@ -68,7 +72,6 @@ if (-not $DryRun) {
 $relVersion = if ($DryRun) { $currentVersion } else { $Version }
 $notesFile  = "release_notes_v$relVersion.md"
 $appZip     = "publish/AutoCommand-v$relVersion-win-x64.zip"
-$anaZip     = "publish/SvchostAnalyzer-win-x64.zip"
 $unblockPs1 = "publish/unblock-autocommand.ps1"
 $sumsFile   = "publish/SHA256SUMS.txt"
 
@@ -76,17 +79,6 @@ $sumsFile   = "publish/SHA256SUMS.txt"
 Step "Publishing self-contained win-x64 build (v$relVersion)"
 dotnet publish AutoCommand.csproj -c Release -r win-x64 --self-contained true -o "publish/v$relVersion"
 Assert-Exit 'dotnet publish'
-
-# Standalone capture engine — separate release asset. The app itself links
-# SvchostAnalyzer.Core and runs captures in-process (no bundled child exe
-# for SmartScreen to block); this exe is the headless/boot-autostart host.
-Step "Publishing SvchostAnalyzer CLI (standalone asset)"
-if (-not (Test-Path '..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj')) {
-    Die 'svchost-watch checkout not found next to autocommand1004 - required for the SvchostAnalyzer asset'
-}
-$analyzerDir = "publish/analyzer-v$relVersion"
-dotnet publish '..\svchost-watch\SvchostAnalyzer\SvchostAnalyzer.csproj' -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $analyzerDir
-Assert-Exit 'dotnet publish analyzer'
 
 # -- Verify the binary carries the csproj version - the whole point -----------
 $exe = "publish/v$relVersion/AutoCommand.exe"
@@ -98,9 +90,8 @@ Step "Verified exe ProductVersion: $binaryVersion"
 
 # -- Package ------------------------------------------------------------------
 Step "Zipping release assets"
-foreach ($z in @($appZip, $anaZip)) { if (Test-Path $z) { Remove-Item $z } }
+if (Test-Path $appZip) { Remove-Item $appZip }
 Compress-Archive -Path "publish/v$relVersion/*" -DestinationPath $appZip
-Compress-Archive -Path "publish/analyzer-v$relVersion/SvchostAnalyzer.exe" -DestinationPath $anaZip
 
 # Standalone unblock script - separate downloadable asset for users who cannot
 # launch the app at all (Smart App Control / SmartScreen blocks on the
@@ -109,11 +100,10 @@ Copy-Item (Join-Path $PSScriptRoot 'unblock-autocommand.ps1') $unblockPs1 -Force
 
 $sums = @(
     "{0}  {1}" -f (Get-FileHash $appZip -Algorithm SHA256).Hash.ToLower(), (Split-Path $appZip -Leaf)
-    "{0}  {1}" -f (Get-FileHash $anaZip -Algorithm SHA256).Hash.ToLower(), (Split-Path $anaZip -Leaf)
     "{0}  {1}" -f (Get-FileHash $unblockPs1 -Algorithm SHA256).Hash.ToLower(), (Split-Path $unblockPs1 -Leaf)
 )
 [System.IO.File]::WriteAllLines((Join-Path $PSScriptRoot $sumsFile), $sums)
-Step "Wrote $sumsFile (app + analyzer + unblock script)"
+Step "Wrote $sumsFile (app + unblock script)"
 
 if ($DryRun) {
     Step "Dry run complete - build, zips and checksums verified; nothing committed, tagged or uploaded"
@@ -144,7 +134,7 @@ git push origin "v$Version"
 Assert-Exit 'git push tag'
 
 Step "Creating GitHub release"
-gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $anaZip $unblockPs1 $sumsFile
+gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $unblockPs1 $sumsFile
 Assert-Exit 'gh release create'
 
 Step "Released v${Version}: https://github.com/dparksports/autocommand-windows/releases/tag/v${Version}"
