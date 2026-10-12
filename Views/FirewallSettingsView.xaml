@@ -33,6 +33,8 @@
                 <TextBlock Text="Quick Profile:" Foreground="{DynamicResource TextPrimaryBrush}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox x:Name="ProfileCombo" Width="140" Margin="0,0,8,0" SelectionChanged="ProfileCombo_SelectionChanged">
                     <ComboBoxItem Content="Custom (Current)" IsSelected="True"/>
+                    <ComboBoxItem Content="Default Lockdown"
+                                  ToolTip="Reset Windows Firewall to its default rule set (removes all custom rules, including AutoCommand's AC-BLOCK rules), then disable every inbound and outbound rule for a total lockdown."/>
                     <ComboBoxItem Content="Shield Up"/>
                     <ComboBoxItem Content="Gaming"/>
                     <ComboBoxItem Content="Office"/>

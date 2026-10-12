@@ -34,7 +34,8 @@ namespace AutoCommand.Services
             HomeTrusted,
             GamingMedia,
             ShieldUp,
-            Office
+            Office,
+            DefaultLockdown
         }
 
         public async Task<ProfileApplyResult> ApplyProfile(ProfileType profile, IProgress<string> progress = null)
@@ -73,6 +74,18 @@ namespace AutoCommand.Services
                     await Toggle(result, progress, "Network Discovery", true);
                     await Toggle(result, progress, "Remote Desktop", true);
                     break;
+                case ProfileType.DefaultLockdown:
+                {
+                    progress?.Report("Default Lockdown: restoring Windows defaults…");
+                    var lockdown = await FirewallService.Instance.ResetToDefaultsAndLockdownAsync(progress);
+                    result.Groups.Add(lockdown);
+                    result.TotalMatched += lockdown.Matched;
+                    result.TotalChanged += lockdown.Changed;
+                    result.TotalFailed += lockdown.Failed;
+                    if (lockdown.FirstError != null && result.FirstError == null) result.FirstError = lockdown.FirstError;
+                    result.Notes = lockdown.Notes;
+                    break;
+                }
             }
 
             return result;

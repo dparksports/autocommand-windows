@@ -206,6 +206,75 @@ namespace AutoCommand.Services
         }
 
         /// <summary>
+        /// Reset the firewall to the Windows default rule set (the COM equivalent of
+        /// `netsh advfirewall reset`), then disable every remaining rule so both all
+        /// inbound and all outbound traffic is blocked. Non-default rules — including
+        /// AutoCommand's own AC-BLOCK rules — do not survive the reset.
+        /// </summary>
+        public Task<GroupToggleResult> ResetToDefaultsAndLockdownAsync(IProgress<string> progress = null)
+        {
+            return Task.Run(() =>
+            {
+                var result = new GroupToggleResult { GroupName = "Lockdown (reset to defaults)" };
+                try
+                {
+                    dynamic fwPolicy = GetPolicy();
+
+                    int beforeCount = 0;
+                    try { beforeCount = (int)fwPolicy.Rules.Count; } catch { }
+
+                    progress?.Report("Restoring Windows default firewall rules…");
+                    fwPolicy.RestoreLocalFirewallDefaults();
+
+                    int afterCount = 0;
+                    try { afterCount = (int)fwPolicy.Rules.Count; } catch { }
+                    int removed = Math.Max(0, beforeCount - afterCount);
+
+                    progress?.Report("Defaults restored — disabling every inbound and outbound rule…");
+
+                    int disabledCount = 0;
+                    foreach (dynamic rule in fwPolicy.Rules)
+                    {
+                        bool wasEnabled;
+                        try
+                        {
+                            wasEnabled = (bool)rule.Enabled;
+                        }
+                        catch
+                        {
+                            continue; // Rule unreadable — skip as before
+                        }
+
+                        result.Matched++;
+                        try
+                        {
+                            rule.Enabled = false;
+                            if (wasEnabled)
+                            {
+                                result.Changed++;
+                                disabledCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            result.Failed++;
+                            if (result.FirstError == null) result.FirstError = ex.Message;
+                        }
+                    }
+
+                    result.Notes = $"Windows default rule set restored ({removed} non-default rule(s) removed); "
+                                 + $"{disabledCount} rule(s) disabled — all inbound and outbound traffic is now blocked.";
+                }
+                catch (Exception ex)
+                {
+                    result.FailedCompletely = true;
+                    result.FirstError = ex.Message;
+                }
+                return result;
+            });
+        }
+
+        /// <summary>
         /// Get summary counts.
         /// </summary>
         public Task<(int TotalInbound, int EnabledInbound, int TotalOutbound, int EnabledOutbound)> GetSummaryAsync()

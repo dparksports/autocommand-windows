@@ -179,7 +179,24 @@ namespace AutoCommand.Views
 
             string profileName = ((ComboBoxItem)ProfileCombo.SelectedItem).Content.ToString();
 
-            if (MessageBox.Show($"Apply '{profileName}' profile?\n\nThis will modify your Windows Defender Firewall rules.",
+            if (profileName == "Default Lockdown")
+            {
+                // Far more destructive than the other profiles — spell out both steps
+                const string warning =
+                    "Default Lockdown performs two destructive steps:\n\n" +
+                    "1. RESET TO DEFAULTS — every non-default rule is deleted, including\n" +
+                    "    custom rules and AutoCommand's own AC-BLOCK rules.\n" +
+                    "2. LOCKDOWN — every inbound and outbound rule is then disabled, cutting\n" +
+                    "    off all network and Internet access until rules are re-enabled.\n\n" +
+                    "Apply this profile?";
+                if (MessageBox.Show(warning, "Confirm Default Lockdown",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                {
+                    ProfileCombo.SelectedIndex = 0; // Reset to Custom
+                    return;
+                }
+            }
+            else if (MessageBox.Show($"Apply '{profileName}' profile?\n\nThis will modify your Windows Defender Firewall rules.",
                 "Confirm Firewall Profile", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             {
                 ProfileCombo.SelectedIndex = 0; // Reset to Custom
@@ -194,6 +211,7 @@ namespace AutoCommand.Views
                 case "Office": type = FirewallProfileService.ProfileType.Office; break;
                 case "Home": type = FirewallProfileService.ProfileType.HomeTrusted; break;
                 case "Public Strict": type = FirewallProfileService.ProfileType.StrictPublic; break;
+                case "Default Lockdown": type = FirewallProfileService.ProfileType.DefaultLockdown; break;
                 default:
                     ProfileCombo.SelectedIndex = 0;
                     return;
@@ -227,7 +245,8 @@ namespace AutoCommand.Views
                 if (!string.IsNullOrEmpty(result.Notes)) sb.AppendLine(result.Notes);
                 foreach (var g in result.Groups)
                 {
-                    if (g.GroupName == "Shield Up (block all)") continue; // Covered by the Notes line
+                    if (g.GroupName == "Shield Up (block all)" || g.GroupName == "Lockdown (reset to defaults)")
+                        continue; // Covered by the Notes line
                     sb.AppendLine($"• {g.GroupName}: {g.Matched} matched, {g.Changed} changed"
                                   + (g.Failed > 0 ? $", {g.Failed} FAILED" : ""));
                 }
