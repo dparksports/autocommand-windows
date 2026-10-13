@@ -6,6 +6,7 @@ Outputs (Assets/):
   corp_why.png         scattered tools -> one dashboard
   corp_visibility.png  Process Monitor + Sysmon Audit
   corp_control.png     Update Control + Telemetry
+  corp_proof.png       Block Proof + telemetry sinkhole
   corp_hardening.png   Firewall + guards + Secure Boot/DBX
   corp_debloat.png     Default Apps + Fresh Setup
 Requires: matplotlib, numpy
@@ -35,7 +36,7 @@ AMBER_SOFT = "#FBF3E4"
 RED = "#B42318"
 RED_SOFT = "#FBEAE8"
 
-VERSION = "v2026.10.10"
+VERSION = "v2026.11.03"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 TITLE_Y_PAD = 74
 
@@ -114,7 +115,7 @@ def corp_banner():
 
     pillars = [
         ("●", "See everything", "Every process, connection and DNS query — attributed,\nrecorded and traceable even after the process exits.", ACCENT),
-        ("●", "Control updates & telemetry", "Pin an app at the version that works; apply the vendor's\nown opt-out to silent usage beacons — all reversible.", GREEN),
+        ("●", "Control updates & telemetry", "Pin an app at the version that works; opt out of usage\nbeacons — and block the ones that ignore it, with proof.", GREEN),
         ("●", "Harden & clean", "Firewall lockdown, 23-app debloat, boot-chain guards,\nSecure Boot DBX updates — confirmed before anything runs.", AMBER),
     ]
     x0, y0, cw, ch, gap = 960, 108, 576, 128, 22
@@ -273,7 +274,8 @@ def corp_control():
     ax.text(796, 158, "Telemetry — vendor opt-outs, applied for you", fontsize=16,
             color=NAVY, fontweight="bold", va="center")
     table = [
-        ("Ultralytics YOLO", "settings.json → sync = false", "Opted out", GREEN, GREEN_SOFT),
+        ("Ultralytics YOLO", "settings.json → sync = false — boolean, re-read to verify", "Opted out", GREEN, GREEN_SOFT),
+        ("Ultralytics, before", 'sync = "false" — a quoted string the library reads as ON', "Not honored", RED, RED_SOFT),
         (".NET CLI", "DOTNET_CLI_TELEMETRY_OPTOUT = 1", "Opted out", GREEN, GREEN_SOFT),
         ("PowerShell 7", "POWERSHELL_TELEMETRY_OPTOUT = 1", "Opted out", GREEN, GREEN_SOFT),
         ("VS Code", "telemetry.telemetryLevel = off", "Opted out", GREEN, GREEN_SOFT),
@@ -289,10 +291,10 @@ def corp_control():
         if i < 5:
             ax.plot([818, 1422], [y + 38, y + 38], color=BORDER, linewidth=0.8)
     card(ax, 796, 606, 648, 96, face=ACCENT_SOFT, edge="#C4D7F6", bar=ACCENT)
-    ax.text(820, 638, "Verified quiet", fontsize=13.5, color=NAVY, fontweight="bold", va="center")
-    ax.text(820, 666, "The DNS resolver cache is checked for each app's known beacon\ndomains — proof the opt-out actually took effect.", fontsize=11.8, color=INK, va="center", linespacing=1.45)
-    chip(ax, 796, 742, "Previous value snapshotted — one click reverts any opt-out", face=GREEN_SOFT, color=GREEN, size=11.5)
-    chip(ax, 796, 780, "Knowledge base updatable without a rebuild (telemetry_rules.json)", face=SURFACE, color=INK, size=11.5)
+    ax.text(820, 638, "Verified quiet — or honestly not", fontsize=13.5, color=NAVY, fontweight="bold", va="center")
+    ax.text(820, 666, "Writes go in the exact token type the app reads and are re-read to verify;\na wrong-typed opt-out shows as Not honored instead of fake quiet.", fontsize=11.8, color=INK, va="center", linespacing=1.45)
+    chip(ax, 796, 742, "App ignores the switch? Pin its beacon domain — or sinkhole it and watch it knock (Block Proof)", face=RED_SOFT, color=RED, size=11)
+    chip(ax, 796, 780, "Previous value snapshotted — one click reverts any opt-out", face=GREEN_SOFT, color=GREEN, size=11.5)
 
     footer(ax, w, h, "Nothing here is a one-way door")
     fig.savefig(os.path.join(OUT, "corp_control.png"), dpi=150)
@@ -407,12 +409,84 @@ def corp_debloat():
 
 
 # ---------------------------------------------------------------------------
+def corp_proof():
+    w, h = 1500, 940
+    fig, ax = canvas(w, h)
+    page_header(ax, w, "Block Proof  ·  Telemetry Sinkhole",
+                "You blocked it. Here is the proof.",
+                "Pinned telemetry domains fail invisibly — the sinkhole makes every attempt walk up to the door, sign the guest book, and get dropped.")
+
+    # left: the tab, mocked
+    card(ax, 56, 156, 700, 116, face=GREEN_SOFT, edge="#BFE3CE", bar=GREEN)
+    ax.text(84, 190, "Pinned:  www.google-analytics.com  →  127.0.0.1", fontsize=13.5,
+            color=NAVY, fontweight="bold", va="center")
+    ax.text(84, 222, "Sinkhole active — listening on 127.0.0.1:443. Attempts are logged and dropped.",
+            fontsize=11.8, color=INK, va="center")
+    chip(ax, 84, 250, "toggle back to silent 0.0.0.0 any time", face=PAGE, color=MUTED, size=10.5)
+
+    card(ax, 56, 296, 700, 470, face=PAGE, edge=BORDER)
+    ax.add_patch(FancyBboxPatch((56, 296), 700, 44, boxstyle="round,pad=0,rounding_size=10",
+                                linewidth=0, facecolor=NAVY, zorder=2))
+    ax.text(76, 318, "Denied attempts (live)", fontsize=13.5, color="white", fontweight="bold", va="center")
+    chip(ax, 676, 318, "2,041 denied since Oct 13", face="#0F2038", color="#9FE0B4", size=10.5)
+    feed = [
+        ("19:14:56", "www.google-analytics.com", "python.exe · pid 18092", "rescan_panoramic.py"),
+        ("19:15:26", "www.google-analytics.com", "python.exe · pid 19404", "detect_people_offline.py --camera all"),
+        ("20:02:11", "www.google-analytics.com", "python.exe · pid 21155", "train.py --epochs 50"),
+        ("21:40:03", "www.google-analytics.com", "python.exe · pid 23117", "export_model.py --format onnx"),
+    ]
+    for i, (t, host, proc, cmd) in enumerate(feed):
+        y = 372 + i * 84
+        ax.text(76, y, t, fontsize=11.5, color=MUTED, va="center")
+        ax.text(168, y, host, fontsize=12.2, color=NAVY, fontweight="bold", va="center")
+        ax.text(76, y + 24, f"{proc}  ·  {cmd}", fontsize=11.2, color=INK, va="center")
+        chip(ax, 640, y, "denied", face=RED_SOFT, color=RED, size=10.5)
+        if i < 3:
+            ax.plot([76, 736], [y + 48, y + 48], color=BORDER, linewidth=0.8)
+    ax.text(76, 736, "Every row: hostname from the TLS hello, PID from the OS connection table,",
+            fontsize=11.2, color=MUTED, va="center", style="italic")
+    ax.text(76, 754, "process image and command line from the OS. Plain JSONL on disk. Exportable.",
+            fontsize=11.2, color=MUTED, va="center", style="italic")
+
+    chip(ax, 56, 792, "port 443 busy → sinkhole stays off and says so; the pin still blocks", face=AMBER_SOFT, color=AMBER, size=11)
+    chip(ax, 56, 826, "proof collects while the app runs — with it closed, attempts still fail, unlogged", face=SURFACE, color=INK, size=11)
+
+    # right: the three moments
+    steps = [
+        ("1", "Pin",
+         "The telemetry domain resolves to loopback instead of the real\n"
+         "server. Silent pins (0.0.0.0) fail instantly; the sinkhole (127.0.0.1)\n"
+         "adds a door worth knocking on.", ACCENT),
+        ("2", "Knock",
+         "The beacon completes a real TCP handshake and sends its TLS\n"
+         "hello. The intended hostname (SNI) is read from it, the peer PID\n"
+         "is captured from the OS connection table, then WMI adds the\n"
+         "process image and full command line.", GREEN),
+        ("3", "Drop",
+         "The connection is closed with no reply — ever. The attempt lands\n"
+         "in the feed and the counters as plain JSONL. Nothing left the\n"
+         "machine at any point, in either pin mode.", RED),
+    ]
+    y0 = 156
+    for i, (n, t, body, accent) in enumerate(steps):
+        y = y0 + i * 222
+        card(ax, 796, y, 648, 200, face=SURFACE, bar=accent)
+        ax.text(824, y + 52, n, fontsize=24, color=accent, fontweight="bold", va="center")
+        ax.text(872, y + 36, t, fontsize=16.5, color=NAVY, fontweight="bold", va="center")
+        ax.text(872, y + 96, body, fontsize=11.8, color=INK, va="center", linespacing=1.55)
+
+    footer(ax, w, h, "The block stops the traffic — this shows you it working")
+    fig.savefig(os.path.join(OUT, "corp_proof.png"), dpi=150)
+    plt.close(fig)
+
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     corp_banner()
     corp_why()
     corp_visibility()
     corp_control()
+    corp_proof()
     corp_hardening()
     corp_debloat()
     print("Corporate infographics written to", OUT)

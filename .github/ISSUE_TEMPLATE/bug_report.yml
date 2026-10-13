@@ -1,0 +1,92 @@
+name: 🐛 Bug report
+description: Something broke, crashed, or behaved unexpectedly
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report — AutoCommand is maintained by one person, and good reports are what keep it sharp.
+
+        **⚠️ Security problem? Do not file it here.** Anything that could let malware or another user bypass AutoCommand's protections belongs in private reporting — see [SECURITY.md](https://github.com/dparksports/autocommand-windows/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      description: Most reports are solved by one of these.
+      options:
+        - label: I'm running the latest build from the [Releases page](https://github.com/dparksports/autocommand-windows/releases)
+        - label: I ran AutoCommand **as Administrator** (the monitor tabs need elevation to see everything)
+        - label: If this involves lost connectivity after blocking — I tried the 🚑 **Restore Internet** button in the status bar
+
+  - type: dropdown
+    id: windows-version
+    attributes:
+      label: Windows version
+      options:
+        - Windows 11
+        - Windows 10 (19041+)
+        - Windows 10 (older)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: AutoCommand build
+      description: Shown in Settings → About (or the release zip filename, e.g. v2026.10.13).
+      placeholder: "v2026.10.13"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tab
+    attributes:
+      label: Where did it happen?
+      options:
+        - Process Monitor
+        - Traffic Patterns
+        - Firewall
+        - Sysmon Audit
+        - Windows Defender
+        - Python Spawns
+        - Taskhostw Spawns
+        - Svchost Trace
+        - Connections
+        - Settings
+        - Whole app / startup
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you clicked, what you expected, what actually happened. Screenshots help — drag them in.
+      placeholder: I opened the … tab, clicked …, and instead of … it …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sysmon
+    attributes:
+      label: Was Sysmon installed?
+      description: Many tabs get their data from Sysmon — if it wasn't installed yet, that changes the diagnosis.
+      options:
+        - Yes, installed from the Sysmon Audit tab
+        - No, not installed
+        - Not sure
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics (optional, but it speeds everything up)
+      description: |
+        Everything AutoCommand remembers is readable JSON/text on disk. Paste excerpts of whatever looks relevant — **never paste TLS plaintext or key files** (`sslkeys.log`, `trace-*.jsonl`, `flows\*.jsonl` may contain secrets from your own traffic):
+
+        - `C:\ProgramData\AutoCommand\` — `firewall_config.json`, `firewall_baseline.json`, `bloatware_config.json`
+        - The app's own folder — `blocked.txt`, `ignored_processes.txt`, `check_interval.txt`
+        - `%LOCALAPPDATA%\AutoCommand\pytrace\` — Python Spawns settings/state (not the key files above)
+      render: shell

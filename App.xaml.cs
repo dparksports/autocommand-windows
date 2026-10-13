@@ -39,6 +39,32 @@ namespace AutoCommand
 
             // Finish a Sysmon repair that was waiting for a Windows restart
             FinishSysmonRepairIfPending();
+
+            RemoveLegacyAnalyticsRegistryValues();
+
+            // Telemetry sinkhole: when hosts pins point at 127.0.0.1 (sinkhole
+            // mode, toggled from the Block Proof tab), start the logging
+            // listener immediately so proof accumulates even if that tab is
+            // never opened this session. Touching the proof store also wires
+            // its recorder to the sinkhole. No sinkhole pins → both are no-ops.
+            Services.SinkholeService.Instance.EnsureRunningForCurrentPins();
+            _ = Services.TelemetryProofService.Instance.TotalDenied;
+        }
+
+        // Older builds stored a Google Analytics consent flag and a client-id
+        // GUID under HKCU\Software\AutoCommand. Usage telemetry was removed;
+        // delete the leftovers so no orphaned tracking id survives.
+        // Idempotent — no-op once clean.
+        private void RemoveLegacyAnalyticsRegistryValues()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser
+                    .OpenSubKey(@"Software\AutoCommand", writable: true);
+                key?.DeleteValue("EnableAnalytics", throwOnMissingValue: false);
+                key?.DeleteValue("ClientId", throwOnMissingValue: false);
+            }
+            catch { /* registry unavailable — nothing to clean */ }
         }
 
         private async void FinishSysmonRepairIfPending()

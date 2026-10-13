@@ -12,18 +12,16 @@ A free, open-source security and control dashboard for Windows 10 and 11. One ad
 
 > **🛡 Looking for the setup side?** The first-hour ritual — debloat, firewall presets, privacy opt-outs, OS hardening, update freezes — moved to its own app: [**Shields Up**](https://github.com/dparksports/shields-up/releases/latest) (same author, same undo-first design). AutoCommand stays what this README covers: the analyst toolkit.
 
-## Why it exists
-
-Windows spreads the answers across a dozen tools that don't talk to each other. AutoCommand puts the whole picture in one place:
+## You've been here
 
 ![Why AutoCommand](Assets/corp_why.png?v=fluent1)
 
-- **A mystery process is phoning home.** Find the row — process, destination, owner — then block the IP, block the executable, kill the process, or disable the scheduled task that would resurrect it at 3 a.m.
-- **You want a record, not a guess.** One click installs Sysmon, and from then on every process launch, connection, and DNS query is recorded locally.
-- **A task or script keeps spawning interpreters.** Python Spawns and Taskhostw Spawns show every `python.exe` / `taskhostw.exe` launch with full parentage — and for python environments you explicitly instrument, the call stack that fired the spawn and the decrypted TLS it sent.
-- **svchost.exe looks off.** A timeline over all 70+ service hosts with a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows.
-
----
+- **A python.exe you didn't start is sending packets to four Google addresses.** Task Manager shows you the number and nothing else. AutoCommand shows the script's full command line, its parent, every destination with reverse DNS — and, for environments you instrument, the decrypted request and the call stack that fired it.
+- **You opted out of telemetry. It kept sending.** Some apps read `"sync": "false"` — quoted — as *on*. AutoCommand writes the opt-out in the exact type the app parses, re-reads the file to verify, and shows **Not honored** in amber when the app is lying. And for the ones that ignore switches entirely: pin the beacon domain, or sinkhole it and watch every denied attempt by PID and command line.
+- **A scheduled task resurrects a dead updater at 3 a.m.** Kill the process and it's back by morning. Here, the row resolves to the task itself — trigger, parent, handler DLL — and one click disables the thing that keeps bringing it back.
+- **svchost.exe is eating a CPU core and Windows says that's normal.** Seventy service hosts, no labels. The Svchost Trace timeline names them, and the pattern detector flags the ones with bad parents, respawn loops, or upload-dominant flows.
+- **An app updated itself overnight and your workflow broke.** Pin it: the updater's write access is denied, read-and-execute untouched, and unfreezing restores the exact permissions that were there before.
+- **You want a record, not a guess.** One click installs Sysmon — from then on every process launch, connection and DNS query on this machine is recorded locally, surviving process exit, exportable to CSV.
 
 ## The tabs
 
@@ -35,12 +33,13 @@ Windows spreads the answers across a dozen tools that don't talk to each other. 
 | 🧭 **Sysmon Audit** | One status card + a live feed of every process launch with full command line and parent. Installed and configured from the app. |
 | 🦠 **Windows Defender** | The Defender answer to "why is it eating my machine": **live MsMpEng CPU/memory** with a 5-minute sparkline, engine status (real-time + tamper protection, platform/engine/signature versions, last quick/full scan with durations), a **live activity feed** straight from Defender's own event log (scans started/finished/stopped, detections, definition updates, cloud-protection activity, configuration changes), scan durations paired by Scan ID, and one-click **quick/full scan + definition update** triggers. Performance knobs: scan **CPU cap** slider (5–100% with presets) and **idle-only scheduled scans**; refusals from Tamper Protection or policy are surfaced, not swallowed. The **exclusions view is read-only by design** — AutoCommand shows what's excluded (so you can spot gaps) but never adds exclusions, since that's a classic malware technique; the card explains how to add them yourself via Windows Security and why narrow build-output exclusions beat broad ones — with a one-click deep link that opens Windows Security at the right settings page (the app itself never writes an exclusion). |
 | 🐍 **Python Spawns** | Every `python.exe` launch as it happens — who spawned it (parent image + command line), what it ran, when it exited. For environments you explicitly instrument: the **Python call stack at the moment a spawn API fired**, and **decrypted TLS plaintext** of what the process sent (SNI, HTTP request/response), from its own SSLKEYLOGFILE secrets + a NIC-level TCP capture. |
+| 🚫 **Block Proof** | The other half of blocking telemetry: proof it worked. When a telemetry domain is pinned in the hosts file, this tab shows the pins and their mode; with **sinkhole mode** on, every denied attempt is caught live — hostname from the TLS hello, PID from the OS connection table, process image and command line — counted per domain and per process, persisted as plain JSONL, exportable to CSV. |
 | 🧵 **Taskhostw Spawns** | The same spawn tracing for `taskhostw.exe` — and the "why" is built in: each row resolves to the **scheduled task** that launched it (task path, user context, COM-handler DLL), with the full task summary and the PID-inquiry trace one click away. |
 | 🔬 **Svchost Trace** | A timeline over the 70+ `svchost.exe` service hosts — spawns with parents, connection lifetimes, byte flows — plus a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows. Exports JSONL; drives a headless capture service with boot auto-start. The capture engine is built into the app (no separate binary to install or unblock). Headless 24/7 recording with boot auto-start uses the standalone SvchostAnalyzer.exe host, which is no longer distributed with releases — an already-installed copy keeps working. |
 | 🌐 **Connections** | A second live connection view. |
-| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, analytics opt-in, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
+| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
 
-![Process Monitor and Sysmon Audit](Assets/corp_visibility.png?v=fluent1)
+![See everything](Assets/corp_visibility.png?v=fluent1)
 
 ## Python Spawns, in depth
 
@@ -54,6 +53,27 @@ Three questions about every python process that starts on the machine, answered 
 
 **Limitations, honestly:** loopback traffic never crosses the NIC (invisible to the capture); IPv6 and UDP/QUIC are out of scope; pid→flow attribution is by endpoint at connect time; code that builds a raw `ssl.SSLContext` directly, or uses custom crypto, ignores `SSLKEYLOGFILE`; `-S`, frozen and embedded interpreters never load site at all and cannot be instrumented (a `.pth` in real site-packages survives `-I`/`-E`); TLS 1.3 KeyUpdate re-derivation is best-effort and failures are flagged, never guessed. The engine pieces that can run headless have an offline self-test (`docs/selftest/run-selftest.ps1` — reassembly, the hook payload, and decryption of a real TLS 1.2/1.3 session over a loopback relay, no admin needed); the Sysmon watcher and raw-socket capture need the app elevated.
 
+## Block Proof, in depth
+
+Blocking is easy; *knowing it worked* is where other tools strand you. A hosts-file pin fails invisibly — the beacon gets connection-refused before a single packet touches the NIC, and success looks identical to "it gave up." This tab turns that silence into evidence:
+
+![Block Proof](Assets/corp_proof.png?v=fluent1)
+
+- **The pin** — telemetry opt-outs that ship with a network block (from Shields Up's Telemetry page or this app's rules engine) pin the beacon domain in the hosts file under a marker line carrying the rule id. `0.0.0.0` is the default: attempts fail instantly, system-wide, nothing logged, nothing leaves the machine.
+- **The sinkhole** — flip the toggle and the pin points at `127.0.0.1` instead, where AutoCommand owns a listener on loopback 443. Every attempt now completes a real TCP handshake, sends its TLS ClientHello — from which the intended hostname is read — and is closed with **no reply, ever**. The peer PID is captured from the OS connection table while the socket is live; WMI adds the process image and full command line.
+- **The proof** — each denied attempt lands in the live feed and the cumulative counters ("2,041 denied since Oct 13"), per hostname and per process, persisted as plain JSONL next to the app (`telemetry_proof.jsonl` — readable, greppable, exportable to CSV, clearable). Rows read: *time · hostname attempted · process · pid · command line · denied at sinkhole*.
+- **Honest edges, stated in the tab itself** — proof collects while the app runs (with it closed, attempts still fail instantly, just unlogged); if another local server already owns `127.0.0.1:443` (local HTTPS dev is the usual suspect) the sinkhole stays off and says so while the pin keeps blocking; pin addresses are only ever `0.0.0.0` or `127.0.0.1`, enforced in code — a tampered rules file cannot redirect a domain anywhere else.
+
+## Opt-outs that actually hold
+
+![Update Control + Telemetry](Assets/corp_control.png?v=fluent1)
+
+The Telemetry page (Shields Up) applies each vendor's own documented switch — and this release makes three guarantees the ecosystem rarely gives you:
+
+- **Written the way the app reads it.** JSON booleans as booleans, re-read after writing. A quoted `"false"` that the target parses as *on* is reported as **Opt-out not honored**, in amber, with the evidence line showing the raw value — not as a fake green "Opted out."
+- **Restart-aware messaging.** Opt-outs apply to processes started after the change; already-running ones keep the old setting until restarted. The result dialog says so instead of letting you wonder.
+- **A ladder when the switch isn't enough.** Vendor flag → the app's own offline env var → hosts pin → sinkhole. Each rung is one click, reversible, and the last one shows you the attempts it denies.
+
 ## Blocked things, managed
 
 Blocking is easy; *un*-blocking is where other tools strand you. AutoCommand:
@@ -64,11 +84,13 @@ Blocking is easy; *un*-blocking is where other tools strand you. AutoCommand:
 - **verifies unknown IPs for you** — one button asks the internet registries (RDAP) who owns each target, cached machine-wide;
 - **restores you from mistakes** — the status-bar 🚑 button disables every AutoCommand block and flushes DNS in one click; *Restore except Microsoft/Windows* brings your real blocks back while leaving only the breakage-causing ones off.
 
+![Hardening](Assets/corp_hardening.png?v=fluent1)
+
 ## What AutoCommand will not do
 
 - **Nothing runs without you.** Blocks, kills, and instrumentation installs all confirm first.
 - **Observational by default.** The spawn/connection tabs only watch; the invasive capabilities (call stacks, TLS plaintext) exist solely for python environments you explicitly instrument.
-- **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); its own telemetry is opt-in and off by default.
+- **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); the app collects no usage telemetry — and the code that once did is gone, leftovers included.
 
 ## Build from source
 
@@ -92,4 +114,9 @@ Apache License 2.0
 
 © 2026 Dan Park, magicpoint.ai
 
-Issues and PRs welcome — pick a tab, keep the design rules in the [Technical Notes](docs/TECHNICAL_NOTES.md), and match the existing code style.
+## Community
+
+Every kind of message has its own door — pick yours in [SUPPORT.md](SUPPORT.md):
+
+- 💬 **Say hello or ask a question** — [Discussions → General](https://github.com/dparksports/autocommand-windows/discussions/categories/general)
+- ❤️ **Send kudos / share what you caught** — [Discussions → Show and tell](https://github.com/dparksports/autocommand-windows/discussions/categories/show-and-tell)

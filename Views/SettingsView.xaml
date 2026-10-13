@@ -142,30 +142,6 @@
                     </Grid>
                 </Border>
 
-                <!-- Privacy & Analytics -->
-
-                <Border Style="{StaticResource CardPanel}">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Text="Privacy &amp; Analytics" Style="{StaticResource SectionHeader}"/>
-
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,8">
-                            <CheckBox x:Name="AnalyticsCheck" 
-                                      Content="Share anonymous usage data to help improve Auto-Command" 
-                                      Checked="AnalyticsCheck_Checked"
-                                      Unchecked="AnalyticsCheck_Unchecked"/>
-                        </StackPanel>
-                        
-                        <TextBlock Grid.Row="2" Text="Sends basic usage events (like app opens) to Firebase/Google Analytics using the Measurement Protocol. No personal or identifiable data is collected."
-                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"/>
-                    </Grid>
-                </Border>
-
                 <!-- Application Information -->
                 <Border Style="{StaticResource CardPanel}">
                     <Grid>

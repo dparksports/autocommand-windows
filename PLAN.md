@@ -36,7 +36,7 @@ One new tab, three capabilities:
   tab must be unaffected. The new capture service owns its private socket.
 - Sysmon EventData is parsed by XML data NAME, never by property index.
 - All secrets (TLS keys, plaintext) live in memory or in the user-ACL'd
-  `%LOCALAPPDATA%\AutoCommand\pytrace` directory; never in export/telemetry.
+  `%LOCALAPPDATA%\AutoCommand\pytrace` directory; never in exports.
 
 ## Phases
 

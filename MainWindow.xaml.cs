@@ -29,12 +29,6 @@ namespace AutoCommand
             // Live version from the assembly instead of a hardcoded string
             VersionText.Text = $"AutoCommand v{AppVersion}";
 
-            // Set up global exception tracking
-            Application.Current.DispatcherUnhandledException += Current_DispatcherUnhandledException;
-
-            // Initialize Telemetry
-            _ = TelemetryService.Instance.InitializeAsync(HiddenTelemetryWebView);
-
             InitializeEnforcer();
 
             // App-level TCP capture + traffic aggregation: one raw socket
@@ -43,22 +37,6 @@ namespace AutoCommand
             // (process → destination → bytes) history across sessions.
             Services.TrafficAggregationService.Shared.Attach(Services.TcpStreamCaptureService.Shared);
             Services.TrafficAggregationService.Shared.Start();
-
-            // Fire telemetry app_open event (fire-and-forget)
-            _ = TelemetryService.Instance.LogEventAsync("app_open", new Dictionary<string, object>
-            {
-                { "app_version", AppVersion },
-                { "os_version", Environment.OSVersion.VersionString }
-            });
-        }
-
-        private void Current_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
-        {
-            _ = TelemetryService.Instance.LogEventAsync("app_exception", new Dictionary<string, object>
-            {
-                { "message", e.Exception.Message },
-                { "stack_trace", e.Exception.StackTrace ?? "No stack trace" }
-            });
         }
 
         private void InitializeEnforcer()
@@ -257,26 +235,6 @@ namespace AutoCommand
                     "🚑 Restore Internet", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             finally { RestoreInternetBtn.IsEnabled = true; }
-        }
-
-        // ── Tab-switch handler ───────────────────────────────────────────────
-
-        private void MainTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            // Guard: nested selection events from DataGrids etc. inside tabs fire this too
-            if (!ReferenceEquals(e.OriginalSource, MainTabControl)) return;
-
-            string tabName = "Unknown";
-            if (MainTabControl.SelectedItem is TabItem ti && ti.Header is StackPanel sp
-                && sp.Children.Count > 1 && sp.Children[1] is System.Windows.Controls.TextBlock tb)
-            {
-                tabName = tb.Text;
-            }
-
-            _ = TelemetryService.Instance.LogEventAsync("tab_view", new Dictionary<string, object>
-            {
-                { "tab_name", tabName }
-            });
         }
     }
 }

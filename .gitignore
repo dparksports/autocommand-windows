@@ -16,3 +16,4 @@ check_interval.txt
 Assets/icons/
 PyTraceSelfTest/bin/
 PyTraceSelfTest/obj/
+publish/

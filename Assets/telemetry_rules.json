@@ -4,13 +4,26 @@
       "id": "ultralytics-sync",
       "appName": "Ultralytics YOLO (Python)",
       "category": "Python library",
-      "mechanism": "Sends anonymized usage statistics to Google Analytics whenever the library loads, tied to a persistent install uuid (%APPDATA%\\Ultralytics\\settings.json).",
+      "mechanism": "Sends anonymized usage statistics to Google Analytics at the end of predict/train/val/export runs, tied to a persistent install uuid (%APPDATA%\\Ultralytics\\settings.json). The switch is honored only when written as a JSON boolean — a quoted \"false\" reads back as ON.",
       "scope": "User",
       "riskNote": "Low — model training and inference are unaffected; this only disables the stats upload and Hub sync.",
       "watchDomains": [ "google-analytics.com" ],
       "detection": { "type": "file", "path": "%APPDATA%\\Ultralytics\\settings.json" },
-      "stateProbe": { "type": "json", "path": "%APPDATA%\\Ultralytics\\settings.json", "key": "sync", "offValues": [ "false" ] },
-      "optOut": { "type": "json", "path": "%APPDATA%\\Ultralytics\\settings.json", "key": "sync", "value": "false" }
+      "stateProbe": { "type": "json", "path": "%APPDATA%\\Ultralytics\\settings.json", "key": "sync", "offValues": [ "false" ], "valueType": "bool" },
+      "optOut": { "type": "json", "path": "%APPDATA%\\Ultralytics\\settings.json", "key": "sync", "value": "false", "valueType": "bool" },
+      "enforce": { "type": "hosts", "domains": [ "www.google-analytics.com" ] }
+    },
+    {
+      "id": "ultralytics-offline",
+      "appName": "Ultralytics YOLO (offline mode)",
+      "category": "Python library",
+      "mechanism": "YOLO_OFFLINE=1 makes the library skip all of its own network calls — usage statistics, package auto-install and version checks. Honored by the library itself; no settings file involved.",
+      "scope": "User — affects every new Python process",
+      "riskNote": "Low-medium — also disables auto-install and update checks; model weights must already be on disk.",
+      "watchDomains": [ "google-analytics.com", "ultralytics.com" ],
+      "detection": { "type": "file", "path": "%APPDATA%\\Ultralytics\\settings.json" },
+      "stateProbe": { "type": "env", "var": "YOLO_OFFLINE", "offValues": [ "1", "true" ] },
+      "optOut": { "type": "env", "var": "YOLO_OFFLINE", "value": "1" }
     },
     {
       "id": "dotnet-cli-telemetry",

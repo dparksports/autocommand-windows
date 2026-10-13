@@ -18,7 +18,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
     <PackageReference Include="System.Management" Version="10.0.0-preview.4.25258.110" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0-preview.4.25258.110" />
   </ItemGroup>
@@ -41,9 +40,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Assets\Web\telemetry.html">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <Content Include="Assets\telemetry_rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
