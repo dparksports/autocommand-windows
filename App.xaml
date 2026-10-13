@@ -72,6 +72,32 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <!-- ── ToolTip: app-themed instead of the system colors. The default
+             tooltip follows the OS info colors, which lands dark-on-dark (or
+             washed-out) over this dark theme — e.g. Defender's event-log
+             description hover tip. Light text on the raised surface keeps
+             contrast high; wrapping + MaxWidth keep long event descriptions
+             readable instead of running off-screen. -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="MaxWidth" Value="560"/>
+            <Setter Property="TextBlock.TextWrapping" Value="Wrap"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="6" Padding="10,7">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- ── TabControl (Sidebar Layout) ── -->
         <Style TargetType="TabControl">
             <Setter Property="Background" Value="Transparent"/>

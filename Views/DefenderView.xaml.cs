@@ -272,6 +272,30 @@ namespace AutoCommand.Views
             }
         }
 
+        private void OpenSecurityExclusions_Click(object sender, RoutedEventArgs e)
+        {
+            // Protocol launch through the shell — lands on Virus & threat
+            // protection settings, where "Add or remove exclusions" lives.
+            // Windows Security collects the confirmation itself; the app
+            // never writes exclusions (read-only stance).
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "windowsdefender://threatsettings",
+                    UseShellExecute = true
+                });
+                HeaderStatusText.Text = "Opened Windows Security — exclusions are under Virus & threat protection settings.";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Could not open Windows Security:\n\n{ex.Message}\n\nOpen it manually and go to\n" +
+                    "Virus & threat protection → Manage settings → Exclusions.",
+                    "Windows Security", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         // -----------------------------------------------------------------------
         // Actions: scans + definitions
         // -----------------------------------------------------------------------

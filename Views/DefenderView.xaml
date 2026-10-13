@@ -30,15 +30,17 @@
             </StackPanel>
         </Grid>
 
-        <!-- Two columns: status & controls | monitoring -->
+        <!-- Two columns: status & controls | monitoring, separated by a
+             draggable divider so the event log can be widened -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1.1*"/>
-                <ColumnDefinition Width="0.9*"/>
+                <ColumnDefinition Width="1.1*" MinWidth="300"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="0.9*" MinWidth="280"/>
             </Grid.ColumnDefinitions>
 
             <!-- Left: status & controls -->
-            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
 
                     <!-- Engine status -->
@@ -177,15 +179,24 @@
                                     </StackPanel>
                                 </Border>
                             </Grid>
+                            <Button Content="🛡 Add exclusions in Windows Security ↗" Style="{StaticResource PrimaryButton}"
+                                    Padding="8,2" FontSize="10" Margin="0,8,0,0" HorizontalAlignment="Left"
+                                    Click="OpenSecurityExclusions_Click"
+                                    ToolTip="Opens Windows Security at Virus &amp; threat protection settings — 'Add or remove exclusions' lives there. AutoCommand itself never writes exclusions."/>
                             <TextBlock Margin="0,8,0,0" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"
-                                       Text="Defender skips everything on these lists entirely — malware placed in an excluded path, or written by an excluded process, is not scanned. This view is read-only on purpose: adding antivirus exclusions is a classic malware technique, so AutoCommand shows you what is excluded but never changes it. To add one yourself, use Windows Security → Virus &amp; threat protection → Manage settings → Exclusions (admin PowerShell: Add-MpPreference). Prefer the narrowest path that solves your problem — e.g. your build output (obj\bin, node_modules) rather than a whole drive — because every exclusion is a place malware can live unscanned."/>
+                                       Text="Defender skips everything on these lists entirely — malware placed in an excluded path, or written by an excluded process, is not scanned. This view is read-only on purpose: adding antivirus exclusions is a classic malware technique, so AutoCommand shows you what is excluded but never changes it. To add one yourself, use the button above — it opens Windows Security at Virus &amp; threat protection settings, where Exclusions lives (admin PowerShell: Add-MpPreference works too). Prefer the narrowest path that solves your problem — e.g. your build output (obj\bin, node_modules) rather than a whole drive — because every exclusion is a place malware can live unscanned."/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
 
+            <!-- Divider: drag to widen/narrow the event log -->
+            <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          Background="{DynamicResource BorderBrush}" ShowsPreview="False"
+                          ResizeBehavior="PreviousAndNext" ToolTip="Drag to resize the event log"/>
+
             <!-- Right: activity feed -->
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="8,0,0,0">
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
                 <Border Style="{StaticResource CardPanel}">
                     <Grid>
                         <Grid.RowDefinitions>
