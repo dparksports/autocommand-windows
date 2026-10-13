@@ -582,9 +582,20 @@ namespace AutoCommand.Services
         private static void UpdateVerdict(TaskLaunchInfo info)
         {
             if (string.IsNullOrEmpty(info.TaskPath)) { info.Verdict = null; return; }
-            if (info.HandlerDllExists == false) { info.Verdict = "Orphaned"; return; }
 
             bool inboxPath = info.TaskPath.StartsWith("\\Microsoft\\", StringComparison.OrdinalIgnoreCase);
+
+            // A classic-COM miss (handler DLL not registered) is the "leftover
+            // of uninstalled software" signature for third-party tasks. Inbox
+            // tasks also resolve handlers through stores the classic lookup
+            // doesn't cover (packaged COM et al.) — they run fine unregistered
+            // in HKCR — so they stay Inbox with an unresolved handler.
+            if (info.HandlerDllExists == false)
+            {
+                info.Verdict = inboxPath ? "Inbox" : "Orphaned";
+                return;
+            }
+
             bool systemCode = true;
             if (!string.IsNullOrEmpty(info.HandlerDll))
             {
