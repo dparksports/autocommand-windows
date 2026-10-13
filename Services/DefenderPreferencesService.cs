@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -49,6 +50,9 @@ namespace AutoCommand.Services
             /// the cap is policy-owned in that case (tamper-blocked builds route
             /// through it). Null when no policy exists.</summary>
             public int? PolicyCpuLoadFactor { get; set; }
+
+            /// <summary>The ScanOnlyIfIdle Group Policy value when one is set.</summary>
+            public bool? PolicyScanOnlyIfIdle { get; set; }
             public List<string> ExclusionPaths { get; } = new();
             public List<string> ExclusionProcesses { get; } = new();
             public List<string> ExclusionExtensions { get; } = new();
@@ -70,7 +74,7 @@ namespace AutoCommand.Services
             public bool ViaPolicy { get; set; }
         }
 
-        private const int TimeoutMs = 30_000; // first Get-MpComputerStatus can be slow
+        private const int TimeoutMs = 60_000; // first Get-MpComputerStatus can be slow; tamper-blocked sets are skipped, not waited out
 
         // PS 5.1's ConvertTo-Json collapses 0/1-element arrays to scalars, so
         // lists cross the boundary as unit-separator (\u001f) joined strings.
@@ -90,27 +94,30 @@ $viaPolicy = $false
     function Fmt($d) { if ($d) { $d.ToUniversalTime().ToString('u') } else { $null } }
     $policyCpu = $null
     try { $policyCpu = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Scan' -Name AvgCpuLoadFactor -ErrorAction SilentlyContinue).AvgCpuLoadFactor } catch { }
+    $policyIdle = $null
+    try { $policyIdle = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Scan' -Name ScanOnlyIfIdle -ErrorAction SilentlyContinue).ScanOnlyIfIdle } catch { }
     [pscustomobject]@{
-        ok       = ($null -ne $pref -and $null -ne $stat)
-        setErr   = $setErr
-        viaPolicy= $viaPolicy
-        cpu      = $pref.ScanAvgCPULoadFactor
-        policyCpu= $policyCpu
-        idle     = [bool]$pref.ScanOnlyIfIdleEnabled
-        rtp      = $stat.RealTimeProtectionEnabled
-        tamper   = $stat.IsTamperProtected
-        mode     = $stat.AMRunningMode
-        product  = $stat.AMProductVersion
-        engine   = $stat.AMEngineVersion
-        sig      = $stat.AntivirusSignatureVersion
-        sigTime  = Fmt $stat.AntivirusSignatureLastUpdated
-        qStart   = Fmt $stat.QuickScanStartTime
-        qEnd     = Fmt $stat.QuickScanEndTime
-        fStart   = Fmt $stat.FullScanStartTime
-        fEnd     = Fmt $stat.FullScanEndTime
-        paths    = (@($pref.ExclusionPath     | Where-Object { $_ }) -join $sep)
-        procs    = (@($pref.ExclusionProcess  | Where-Object { $_ }) -join $sep)
-        exts     = (@($pref.ExclusionExtension| Where-Object { $_ }) -join $sep)
+        ok        = ($null -ne $pref -and $null -ne $stat)
+        setErr    = $setErr
+        viaPolicy = $viaPolicy
+        cpu       = $pref.ScanAvgCPULoadFactor
+        policyCpu = $policyCpu
+        idle      = [bool]$pref.ScanOnlyIfIdleEnabled
+        policyIdle= $policyIdle
+        rtp       = $stat.RealTimeProtectionEnabled
+        tamper    = $stat.IsTamperProtected
+        mode      = $stat.AMRunningMode
+        product   = $stat.AMProductVersion
+        engine    = $stat.AMEngineVersion
+        sig       = $stat.AntivirusSignatureVersion
+        sigTime   = Fmt $stat.AntivirusSignatureLastUpdated
+        qStart    = Fmt $stat.QuickScanStartTime
+        qEnd      = Fmt $stat.QuickScanEndTime
+        fStart    = Fmt $stat.FullScanStartTime
+        fEnd      = Fmt $stat.FullScanEndTime
+        paths     = (@($pref.ExclusionPath     | Where-Object { $_ }) -join $sep)
+        procs     = (@($pref.ExclusionProcess  | Where-Object { $_ }) -join $sep)
+        exts      = (@($pref.ExclusionExtension| Where-Object { $_ }) -join $sep)
     } | ConvertTo-Json -Compress
 } catch {
     [pscustomobject]@{ ok = $false; setErr = ('read failed: ' + $_.Exception.Message) } | ConvertTo-Json -Compress
@@ -120,34 +127,44 @@ $viaPolicy = $false
             RunScriptAsync(Prologue + ReadTail, root => ParseState(root, setErr: null));
 
         /// <summary>
-        /// Sets the scan CPU cap. Direct Set-MpPreference first; when Tamper
-        /// Protection blocks it ("The requested operation is not supported" on
-        /// recent builds, even elevated), falls back to the Group Policy value
-        /// the "Specify the maximum percentage of CPU utilization during a
-        /// scan" ADMX writes — HKLM\SOFTWARE\Policies\Microsoft\Windows
-        /// Defender\Scan\AvgCpuLoadFactor — which tamper protection does not
-        /// police. Defender picks policy changes up on its next config
-        /// refresh, so Get-MpPreference may lag the write briefly.
+        /// Sets the scan CPU cap. When Tamper Protection is on we go straight
+        /// to the Group Policy value ("Specify the maximum percentage of CPU
+        /// utilization during a scan": HKLM\SOFTWARE\Policies\Microsoft\Windows
+        /// Defender\Scan\AvgCpuLoadFactor) — Set-MpPreference is blocked there
+        /// and its refusal is SLOW (it hangs past any sane timeout before
+        /// erroring), so calling it first just burns half a minute. Tamper off:
+        /// direct write first, policy registry as the automatic fallback.
+        /// Defender picks policy changes up on its next config refresh.
         /// </summary>
-        public Task<SetResult> SetScanCpuLoadFactorAsync(int percent)
+        public Task<SetResult> SetScanCpuLoadFactorAsync(int percent, bool preferPolicy = false)
         {
             int clamped = Math.Clamp(percent, 5, 100);
-            string setBlock =
-                $"try {{ Set-MpPreference -ScanAvgCPULoadFactor {clamped} }} catch {{ $setErr = $_.Exception.Message }}`n" +
-                "if ($setErr) {`n" +
-                "    try {`n" +
-                "        $key = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan'`n" +
-                "        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }`n" +
-                $"        New-ItemProperty -Path $key -Name 'AvgCpuLoadFactor' -Value {clamped} -PropertyType DWord -Force | Out-Null`n" +
-                "        $setErr = $null`n" +
-                "        $viaPolicy = $true`n" +
-                "    } catch { $setErr = ('policy fallback failed: ' + $_.Exception.Message) }`n" +
-                "}`n";
-            return RunSetAsync(setBlock);
+            string direct = $"try {{ Set-MpPreference -ScanAvgCPULoadFactor {clamped} }} catch {{ $setErr = $_.Exception.Message }}`n";
+            string policy = PolicyWriteBlock("AvgCpuLoadFactor", clamped.ToString(CultureInfo.InvariantCulture));
+            return RunSetAsync(preferPolicy ? policy : direct + "if ($setErr) {`n" + policy + "`n}`n");
         }
 
-        public Task<SetResult> SetScanOnlyIfIdleAsync(bool enabled) =>
-            RunSetAsync($"try {{ Set-MpPreference -ScanOnlyIfIdleEnabled ${enabled} }} catch {{ $setErr = $_.Exception.Message }}`n");
+        /// <summary>
+        /// Sets idle-only scanning. Same routing as the CPU cap: policy-first
+        /// under Tamper Protection (ADMX value ScanOnlyIfIdle), direct
+        /// Set-MpPreference with policy fallback otherwise.
+        /// </summary>
+        public Task<SetResult> SetScanOnlyIfIdleAsync(bool enabled, bool preferPolicy = false)
+        {
+            string direct = $"try {{ Set-MpPreference -ScanOnlyIfIdleEnabled ${enabled} }} catch {{ $setErr = $_.Exception.Message }}`n";
+            string policy = PolicyWriteBlock("ScanOnlyIfIdle", enabled ? "1" : "0");
+            return RunSetAsync(preferPolicy ? policy : direct + "if ($setErr) {`n" + policy + "`n}`n");
+        }
+
+        /// <summary>Writes one DWORD under the Defender Scan policy key, creating the key.</summary>
+        private static string PolicyWriteBlock(string name, string value) =>
+            "try {`n" +
+            "    $key = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Scan'`n" +
+            "    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }`n" +
+           $"    New-ItemProperty -Path $key -Name '{name}' -Value {value} -PropertyType DWord -Force | Out-Null`n" +
+            "    $setErr = $null`n" +
+            "    $viaPolicy = $true`n" +
+            "} catch { $setErr = ('policy write failed: ' + $_.Exception.Message) }`n";
 
         /// <summary>
         /// Launches a scan in a detached PowerShell child so this call returns
@@ -285,6 +302,10 @@ $viaPolicy = $false
             state.FullScanEndUtc = GetUtcDate(o, "fEnd");
             if (o.TryGetProperty("policyCpu", out var policyCpu) && policyCpu.ValueKind == JsonValueKind.Number)
                 state.PolicyCpuLoadFactor = policyCpu.GetInt32();
+            if (o.TryGetProperty("policyIdle", out var policyIdle) &&
+                policyIdle.ValueKind is JsonValueKind.True or JsonValueKind.False or JsonValueKind.Number)
+                state.PolicyScanOnlyIfIdle = policyIdle.ValueKind == JsonValueKind.True ||
+                                             (policyIdle.ValueKind == JsonValueKind.Number && policyIdle.GetInt32() != 0);
 
             FillList(o, "paths", state.ExclusionPaths);
             FillList(o, "procs", state.ExclusionProcesses);

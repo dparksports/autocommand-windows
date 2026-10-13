@@ -216,11 +216,14 @@
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
-                                <DataGridTextColumn Header="Summary" Binding="{Binding Summary}" Width="*">
+                                <DataGridTextColumn Header="Summary" Binding="{Binding SummaryFirstLine}" Width="*">
                                     <DataGridTextColumn.ElementStyle>
                                         <Style TargetType="TextBlock">
                                             <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                            <Setter Property="TextWrapping" Value="NoWrap"/>
                                             <Setter Property="ToolTip" Value="{Binding Summary}"/>
+                                            <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
+                                            <Setter Property="ToolTipService.ShowDuration" Value="30000"/>
                                         </Style>
                                     </DataGridTextColumn.ElementStyle>
                                 </DataGridTextColumn>

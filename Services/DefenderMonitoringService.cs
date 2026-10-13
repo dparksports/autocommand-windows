@@ -208,12 +208,9 @@ namespace AutoCommand.Services
             int id = record.Id;
             if (!FeedIdSet.Contains(id)) return null;
 
-            string message = record.FormatDescription() ?? "";
-            // First line only: Defender messages carry the useful summary up front
-            int nl = message.IndexOf('\n');
-            if (nl > 0) message = message[..nl];
-            message = message.Trim();
-            if (message.Length > 200) message = message[..200] + "…";
+            string message = (record.FormatDescription() ?? "").Trim();
+            if (message.Length > 4000) message = message[..4000] + "…";
+            if (message.Length == 0) message = $"(event {id})";
 
             var item = new DefenderActivityItem
             {
@@ -224,9 +221,10 @@ namespace AutoCommand.Services
 
             // Scan records pair on Scan ID; carry both on the item so the
             // aggregator can open/close scans whichever record arrives first.
-            var m = Regex.Match(record.FormatDescription() ?? "", @"Scan ID:\s*\{?([0-9A-Fa-f\-]{36})\}?");
+            string description = record.FormatDescription() ?? "";
+            var m = Regex.Match(description, @"Scan ID:\s*\{?([0-9A-Fa-f\-]{36})\}?");
             if (m.Success) item.ScanId = m.Groups[1].Value;
-            m = Regex.Match(record.FormatDescription() ?? "", @"Scan Type:\s*(\w+)");
+            m = Regex.Match(description, @"Scan Type:\s*(\w+)");
             if (m.Success) item.ScanType = m.Groups[1].Value;
 
             return item;
@@ -271,12 +269,26 @@ namespace AutoCommand.Services
         }
     }
 
-    /// <summary>One Defender operational-log event for the activity feed.</summary>
+    /// <summary>One Defender operational-log event for the activity feed.
+    /// Summary carries the FULL event description (tooltip); the grid cell
+    /// shows SummaryFirstLine so rows stay single-height.</summary>
     public class DefenderActivityItem
     {
         public DateTime TimeUtc { get; set; }
         public int EventId { get; set; }
         public string Summary { get; set; }
+
+        /// <summary>First line of the description, for the grid cell.</summary>
+        public string SummaryFirstLine
+        {
+            get
+            {
+                string s = Summary ?? "";
+                int nl = s.IndexOf('\n');
+                string line = (nl > 0 ? s[..nl] : s).Trim();
+                return line.Length > 160 ? line[..160] + "…" : line;
+            }
+        }
 
         public string ScanId { get; set; }   // scan events only
         public string ScanType { get; set; }

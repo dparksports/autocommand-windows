@@ -28,6 +28,7 @@ namespace AutoCommand.Views
         private DispatcherTimer _cpuDebounce;
         private bool _loading;
         private int _appliedCpu = -1;
+        private bool _lastTamper;   // last known tamper state: routes sets to the policy path
 
         public DefenderView()
         {
@@ -125,10 +126,15 @@ namespace AutoCommand.Views
 
                 string rtp = state.RealTimeProtection == null ? "unknown" : (state.RealTimeProtection == true ? "on" : "off");
                 string tamper = state.TamperProtected == null ? "unknown" : (state.TamperProtected == true ? "on" : "off");
+                _lastTamper = state.TamperProtected == true;
                 PrefStatusText.Text = $"Real-time protection: {rtp} · Tamper protection: {tamper}" +
                     (string.IsNullOrEmpty(state.RunningMode) ? "" : $" · mode: {state.RunningMode}") +
-                    (state.PolicyCpuLoadFactor == null ? "" : $" · scan CPU cap is policy-set: {state.PolicyCpuLoadFactor}%");
+                    (state.PolicyCpuLoadFactor == null && state.PolicyScanOnlyIfIdle == null
+                        ? ""
+                        : " · policy-set values in effect (tamper-safe route)");
 
+                // Policy values own the setting whenever they exist — Defender
+                // applies them over the preference on its next config refresh.
                 int cpu = state.PolicyCpuLoadFactor ?? state.ScanCpuLoadFactor;
                 _appliedCpu = Math.Clamp(cpu, 5, 100);
                 DefenderCpuSlider.Value = _appliedCpu;
@@ -136,7 +142,7 @@ namespace AutoCommand.Views
                     ? $"{_appliedCpu}% (Windows default)"
                     : cpu == 0 ? "no cap" : $"{_appliedCpu}%";
 
-                IdleScanCheck.IsChecked = state.ScanOnlyIfIdle;
+                IdleScanCheck.IsChecked = state.PolicyScanOnlyIfIdle ?? state.ScanOnlyIfIdle;
 
                 // Engine card
                 EngineStatusText.Text =
@@ -202,7 +208,9 @@ namespace AutoCommand.Views
             if (value == _appliedCpu) return;
 
             PrefStatusText.Text = $"Applying scan CPU cap {value}%…";
-            var result = await _prefs.SetScanCpuLoadFactorAsync(value);
+            // Tamper Protection on this build blocks (and slowly hangs)
+            // Set-MpPreference — go straight to the policy value.
+            var result = await _prefs.SetScanCpuLoadFactorAsync(value, preferPolicy: _lastTamper);
             if (result.Ok)
             {
                 _appliedCpu = value;
@@ -245,17 +253,18 @@ namespace AutoCommand.Views
             if (_loading || IdleScanCheck.IsChecked == null) return;
             bool want = IdleScanCheck.IsChecked == true;
 
-            var result = await _prefs.SetScanOnlyIfIdleAsync(want);
+            var result = await _prefs.SetScanOnlyIfIdleAsync(want, preferPolicy: _lastTamper);
             if (result.Ok)
             {
-                PrefStatusText.Text = want
-                    ? "✓ Scheduled scans now wait for an idle machine."
-                    : "✓ Scheduled scans may run at any time.";
+                PrefStatusText.Text = (result.ViaPolicy ? "✓ Applied via the Defender scan policy. " : "✓ ") +
+                    (want
+                        ? "Scheduled scans now wait for an idle machine."
+                        : "Scheduled scans may run at any time.");
             }
             else
             {
                 MessageBox.Show(
-                    $"Windows Defender refused the change:\n\n{result.Error}\n\n" +
+                    $"Windows Defender refused the change:\n\n{result.Error ?? result.Fresh?.UnavailableReason ?? "unknown error"}\n\n" +
                     "Tamper Protection or a Group Policy may own this setting.",
                     "Defender preference", MessageBoxButton.OK, MessageBoxImage.Warning);
                 if (result.Fresh?.Available == true)
