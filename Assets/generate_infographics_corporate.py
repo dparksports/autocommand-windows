@@ -6,7 +6,7 @@ Outputs (Assets/):
   corp_why.png         scattered tools -> one dashboard
   corp_visibility.png  Process Monitor + Sysmon Audit
   corp_control.png     Update Control + Telemetry
-  corp_proof.png       Block Proof + telemetry sinkhole
+  corp_proof.png       Black Hole + telemetry sinkhole
   corp_hardening.png   Firewall + guards + Secure Boot/DBX
   corp_debloat.png     Default Apps + Fresh Setup
 Requires: matplotlib, numpy
@@ -36,7 +36,7 @@ AMBER_SOFT = "#FBF3E4"
 RED = "#B42318"
 RED_SOFT = "#FBEAE8"
 
-VERSION = "v2026.11.03"
+VERSION = "v2026.11.05"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 TITLE_Y_PAD = 74
 
@@ -293,7 +293,7 @@ def corp_control():
     card(ax, 796, 606, 648, 96, face=ACCENT_SOFT, edge="#C4D7F6", bar=ACCENT)
     ax.text(820, 638, "Verified quiet — or honestly not", fontsize=13.5, color=NAVY, fontweight="bold", va="center")
     ax.text(820, 666, "Writes go in the exact token type the app reads and are re-read to verify;\na wrong-typed opt-out shows as Not honored instead of fake quiet.", fontsize=11.8, color=INK, va="center", linespacing=1.45)
-    chip(ax, 796, 742, "App ignores the switch? Pin its beacon domain — or sinkhole it and watch it knock (Block Proof)", face=RED_SOFT, color=RED, size=11)
+    chip(ax, 796, 742, "App ignores the switch? Pin its beacon domain — or sinkhole it and watch it knock (the Black Hole tab)", face=RED_SOFT, color=RED, size=11)
     chip(ax, 796, 780, "Previous value snapshotted — one click reverts any opt-out", face=GREEN_SOFT, color=GREEN, size=11.5)
 
     footer(ax, w, h, "Nothing here is a one-way door")
@@ -412,7 +412,7 @@ def corp_debloat():
 def corp_proof():
     w, h = 1500, 940
     fig, ax = canvas(w, h)
-    page_header(ax, w, "Block Proof  ·  Telemetry Sinkhole",
+    page_header(ax, w, "Black Hole  ·  Telemetry Sinkhole",
                 "You blocked it. Here is the proof.",
                 "Pinned telemetry domains fail invisibly — the sinkhole makes every attempt walk up to the door, sign the guest book, and get dropped.")
 

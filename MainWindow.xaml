@@ -79,10 +79,10 @@
                 <TabItem.Header>
                     <StackPanel Width="160" Margin="0,10">
                         <TextBlock Text="🚫" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Block Proof" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Black Hole" HorizontalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
-                <views:BlockProofView x:Name="BlockProofTab"/>
+                <views:BlackHoleView x:Name="BlackHoleTab"/>
             </TabItem>
 
             <TabItem>

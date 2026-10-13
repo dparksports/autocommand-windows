@@ -9,7 +9,7 @@ namespace AutoCommand.Services
 {
     /// <summary>
     /// Persists denied-telemetry attempts and keeps the aggregate counters the
-    /// Block Proof tab shows. The store is plain JSONL next to the app
+    /// Black Hole tab shows. The store is plain JSONL next to the app
     /// (telemetry_proof.jsonl) — readable, greppable, deletable, in line with
     /// the app's no-hidden-state rule. The in-memory feed keeps the trailing
     /// window for the grid; totals always aggregate the whole file (small by

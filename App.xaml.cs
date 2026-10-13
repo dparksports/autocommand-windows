@@ -43,7 +43,7 @@ namespace AutoCommand
             RemoveLegacyAnalyticsRegistryValues();
 
             // Telemetry sinkhole: when hosts pins point at 127.0.0.1 (sinkhole
-            // mode, toggled from the Block Proof tab), start the logging
+            // mode, toggled from the Black Hole tab), start the logging
             // listener immediately so proof accumulates even if that tab is
             // never opened this session. Touching the proof store also wires
             // its recorder to the sinkhole. No sinkhole pins → both are no-ops.

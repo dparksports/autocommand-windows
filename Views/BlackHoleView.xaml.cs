@@ -13,15 +13,17 @@ using AutoCommand.Services;
 namespace AutoCommand.Views
 {
     /// <summary>
-    /// Block Proof tab — the visible half of the telemetry sinkhole. Shows the
+    /// Black Hole tab — the visible half of the telemetry sinkhole. Shows the
     /// current hosts pins and sinkhole state, a toggle that flips the pins
     /// between silent (0.0.0.0) and logging (127.0.0.1) mode, cumulative
     /// denied-attempt counters, and a live feed of every attempt caught with
     /// process, PID and the hostname from the TLS hello.
     /// </summary>
-    public partial class BlockProofView : UserControl
+    public partial class BlackHoleView : UserControl
     {
         private readonly DispatcherTimer _refresh = new() { Interval = TimeSpan.FromSeconds(5) };
+        private readonly TelemetryRulesService _rules = new();
+        private bool _protectionBusy;
         private bool _toggling;
 
         private sealed class AttemptRow
@@ -42,7 +44,7 @@ namespace AutoCommand.Views
             public int Count { get; set; }
         }
 
-        public BlockProofView()
+        public BlackHoleView()
         {
             InitializeComponent();
         }
@@ -51,7 +53,7 @@ namespace AutoCommand.Views
         {
             TelemetryProofService.Instance.Changed += OnProofChanged;
             SinkholeService.Instance.StatusChanged += OnProofChanged;
-            _refresh.Tick += (_, _) => RefreshState();
+            _refresh.Tick += (_, _) => RefreshAll();
             _refresh.Start();
             RefreshAll();
         }
@@ -69,6 +71,95 @@ namespace AutoCommand.Views
             RefreshState();
             RefreshFeed();
             RefreshTotals();
+            RefreshProtection();
+        }
+
+        // ── Protection status: flag state + pin state + still-beaconing ────
+
+        /// <summary>
+        /// The card that answers "am I actually protected, and by what?" —
+        /// an opt-out flag and a network pin are different promises, and a
+        /// process started before a flag change keeps the old setting until
+        /// it restarts. Evaluated from the same rules knowledge base the
+        /// opt-out flow uses; pin state from the live hosts file.
+        /// </summary>
+        private async void RefreshProtection()
+        {
+            if (_protectionBusy) return;
+            _protectionBusy = true;
+            try
+            {
+                var statuses = await _rules.EvaluateAllAsync();
+                var pins = HostsTelemetryPins.ReadLive();
+                var lines = new List<string>();
+
+                foreach (var s in statuses.Where(s => s.Detected))
+                {
+                    var rule = s.Rule;
+                    var pin = pins.FirstOrDefault(p => rule.WatchDomains.Any(d =>
+                        p.Hostname.Equals(d, StringComparison.OrdinalIgnoreCase) ||
+                        p.Hostname.EndsWith("." + d, StringComparison.OrdinalIgnoreCase)));
+                    string network = pin == null
+                        ? "no pin — beacons still leave the machine"
+                        : pin.IsSinkhole
+                            ? "pinned → 127.0.0.1 — this tab catches the attempts"
+                            : "pinned → 0.0.0.0 (silent — attempts are denied but cannot be logged)";
+
+                    string flagNote = s.State switch
+                    {
+                        TelemetryState.Off => "flag: opted out",
+                        TelemetryState.Ineffective => "flag: present but NOT honored (wrong type)",
+                        TelemetryState.Unknown => "flag: unknown",
+                        _ => "flag: telemetry on",
+                    };
+
+                    string stale = "";
+                    if (rule.Category?.IndexOf("python", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        int older = CountProcessesOlderThanFlag(rule);
+                        if (older > 0)
+                            stale = $"\n    ⚠ {older} python process(es) started before the flag was applied — still using the old setting until restarted";
+                    }
+
+                    lines.Add($"{rule.AppName} — {flagNote} · network: {network}{stale}");
+                }
+
+                string text = lines.Count == 0
+                    ? "No known-telemetry apps detected on this machine."
+                    : string.Join("\n", lines) +
+                      "\nA flag stops new processes only; a pin stops everything immediately — and only pinned attempts appear in this tab.";
+                if (!Dispatcher.CheckAccess()) _ = Dispatcher.BeginInvoke(() => ProtectionText.Text = text);
+                else ProtectionText.Text = text;
+            }
+            catch (Exception ex)
+            {
+                ProtectionText.Text = $"Protection status unavailable: {ex.Message}";
+            }
+            finally { _protectionBusy = false; }
+        }
+
+        /// <summary>
+        /// Processes whose start time predates the rule's settings file last
+        /// being written — i.e. they loaded the flag before its current value.
+        /// </summary>
+        private static int CountProcessesOlderThanFlag(TelemetryRule rule)
+        {
+            try
+            {
+                string path = Environment.ExpandEnvironmentVariables(rule.Detection?.Path ?? "");
+                if (rule.Detection?.Type != "file" || !File.Exists(path)) return 0;
+                var flagWrittenUtc = File.GetLastWriteTimeUtc(path);
+
+                int count = 0;
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("python"))
+                {
+                    try { if (p.StartTime.ToUniversalTime() < flagWrittenUtc) count++; }
+                    catch { /* access denied on some processes — count what we can see */ }
+                    finally { p.Dispose(); }
+                }
+                return count;
+            }
+            catch { return 0; }
         }
 
         private void RefreshState()
@@ -77,10 +168,11 @@ namespace AutoCommand.Views
 
             if (pins.Count == 0)
             {
-                SinkholeStatusText.Text = "No telemetry pins in the hosts file.";
+                SinkholeStatusText.Text = "No telemetry pins in the hosts file — nothing is network-blocked.";
                 SinkholeDetailText.Text =
-                    "Pins are created by the telemetry opt-out flow (Shields Up's Telemetry tab, or this app's " +
-                    "TelemetryRulesService) when you choose \"Block network instead\". There is nothing to prove yet.";
+                    "Opt-out flags alone (see Protection status above) do not stop beacons from processes started before " +
+                    "the flag, and they never show up here. A pin does both: create one from Shields Up's Telemetry tab " +
+                    "(\"Block network instead\") or this app's rules engine, then return to catch the attempts.";
                 SinkholeToggle.IsEnabled = false;
                 SinkholeToggle.IsChecked = false;
                 PinListText.Text = "";
@@ -100,11 +192,12 @@ namespace AutoCommand.Views
             };
             SinkholeStatusText.Text = sinkhole
                 ? $"Sinkhole active — {sink}."
-                : "Pins are silent (0.0.0.0) — attempts fail invisibly.";
+                : "Pins are silent (0.0.0.0) — attempts ARE being denied, but invisibly.";
             SinkholeDetailText.Text = sinkhole
                 ? SinkholeService.Instance.StatusDetail ??
                   "Every attempt completes a handshake to this app, is logged with its process and intended hostname, then dropped. Nothing is ever sent back."
-                : "Turn on sinkhole mode to make each attempt visible: the pin points at 127.0.0.1 and a local listener logs who knocked, then refuses to answer.";
+                : "Silent pins refuse connections before a packet exists — nothing observable remains, which is the point. " +
+                  "Turn on Black Hole logging to make each attempt visible: the pin points at 127.0.0.1 and a local listener logs who knocked, then refuses to answer.";
 
             PinListText.Text = "Pinned: " + string.Join("   ·   ",
                 pins.Select(p => $"{p.Hostname} → {p.Address}"));
