@@ -126,9 +126,10 @@ namespace AutoCommand.Views
                 string rtp = state.RealTimeProtection == null ? "unknown" : (state.RealTimeProtection == true ? "on" : "off");
                 string tamper = state.TamperProtected == null ? "unknown" : (state.TamperProtected == true ? "on" : "off");
                 PrefStatusText.Text = $"Real-time protection: {rtp} · Tamper protection: {tamper}" +
-                    (string.IsNullOrEmpty(state.RunningMode) ? "" : $" · mode: {state.RunningMode}");
+                    (string.IsNullOrEmpty(state.RunningMode) ? "" : $" · mode: {state.RunningMode}") +
+                    (state.PolicyCpuLoadFactor == null ? "" : $" · scan CPU cap is policy-set: {state.PolicyCpuLoadFactor}%");
 
-                int cpu = state.ScanCpuLoadFactor;
+                int cpu = state.PolicyCpuLoadFactor ?? state.ScanCpuLoadFactor;
                 _appliedCpu = Math.Clamp(cpu, 5, 100);
                 DefenderCpuSlider.Value = _appliedCpu;
                 DefenderCpuValueText.Text = cpu == 50
@@ -202,17 +203,34 @@ namespace AutoCommand.Views
 
             PrefStatusText.Text = $"Applying scan CPU cap {value}%…";
             var result = await _prefs.SetScanCpuLoadFactorAsync(value);
-            if (result.Ok && result.Fresh?.Available == true)
+            if (result.Ok)
             {
                 _appliedCpu = value;
-                PopulatePreferences(result.Fresh);
-                PrefStatusText.Text += $"  ✓ Scans capped at {value}% average CPU (higher values finish faster).";
+                if (result.ViaPolicy)
+                {
+                    // Tamper-blocked build: the cap landed via the Group Policy
+                    // value, and Get-MpPreference can lag the policy until
+                    // Defender's next config refresh — hold the requested value
+                    // on screen instead of snapping back to the stale read.
+                    DefenderCpuSlider.Value = value;
+                    DefenderCpuValueText.Text = $"{value}% (via policy)";
+                    PrefStatusText.Text =
+                        $"✓ Scan CPU cap {value}% applied via the Defender scan policy — Tamper Protection " +
+                        "blocks direct preference writes on this build. Defender picks the policy up on its " +
+                        "next config refresh (moments, or the next scan at the latest).";
+                }
+                else
+                {
+                    PopulatePreferences(result.Fresh);
+                    PrefStatusText.Text += $"  ✓ Scans capped at {value}% average CPU (higher values finish faster).";
+                }
             }
             else
             {
-                // Rejected (e.g. Tamper Protection / policy) — snap the UI back
+                // Direct write AND the policy fallback both refused — snap the
+                // UI back to whatever Defender actually reports.
                 string error = result.Error ?? result.Fresh?.UnavailableReason ?? "unknown error";
-                if (result.Fresh != null) PopulatePreferences(result.Fresh);
+                if (result.Fresh?.Available == true) PopulatePreferences(result.Fresh);
                 else PrefStatusText.Text = $"⚠ {error}";
                 MessageBox.Show(
                     $"Windows Defender refused the change:\n\n{error}\n\n" +
