@@ -63,6 +63,16 @@
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Width="160" Margin="0,10">
+                        <TextBlock Text="🦠" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                        <TextBlock Text="Windows Defender" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:DefenderView x:Name="DefenderTab"/>
+            </TabItem>
+
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Width="160" Margin="0,10">
                         <TextBlock Text="🐍" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
                         <TextBlock Text="Python Spawns" HorizontalAlignment="Center"/>
                     </StackPanel>

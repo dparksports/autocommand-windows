@@ -27,7 +27,7 @@ namespace AutoCommand.Views
         private async void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
             await CheckStartupTask();
-            
+
             // Load Analytics preference and sync both telemetry services
             AnalyticsCheck.Checked -= AnalyticsCheck_Checked;
             AnalyticsCheck.Unchecked -= AnalyticsCheck_Unchecked;
