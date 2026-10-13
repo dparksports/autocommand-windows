@@ -17,6 +17,8 @@ namespace AutoCommand.Models
         private bool _exited;
         private int _flowCount;
         private bool _hasTrace;
+        private string _outcome;
+        private string _verdict;
 
         public DateTime TimeUtc { get; set; }
         public int Pid { get; set; }
@@ -82,6 +84,18 @@ namespace AutoCommand.Models
             }
         }
 
+        /// <summary>View-set outcome ("rc 0 · 0.4 s") once the scheduler reported the action's result.</summary>
+        public void SetOutcome(string outcome) { _outcome = outcome; OnPropertyChanged(nameof(OutcomeDisplay)); }
+
+        /// <summary>View-set verdict from TaskLaunchInfo — Inbox / Third-party / Orphaned.</summary>
+        public void SetVerdict(string verdict)
+        {
+            _verdict = verdict;
+            OnPropertyChanged(nameof(Verdict));
+            OnPropertyChanged(nameof(VerdictVisibility));
+            OnPropertyChanged(nameof(VerdictBackground));
+        }
+
         /// <summary>Lifecycle flag — flipped by the EID 5 (process terminate) watcher.</summary>
         public bool Exited
         {
@@ -111,6 +125,27 @@ namespace AutoCommand.Models
 
         [JsonIgnore]
         public string LifeDisplay => Exited ? "exited" : "running";
+
+        /// <summary>Outcome column: return code + duration once the scheduler reported a result, else lifecycle.</summary>
+        [JsonIgnore]
+        public string OutcomeDisplay => _outcome ?? (Exited ? "exited" : "running");
+
+        [JsonIgnore]
+        public string Verdict => _verdict;
+
+        [JsonIgnore]
+        public System.Windows.Visibility VerdictVisibility =>
+            string.IsNullOrEmpty(_verdict) ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+
+        /// <summary>Chip background per verdict (color string; the XAML converter turns it into a brush).</summary>
+        [JsonIgnore]
+        public string VerdictBackground => _verdict switch
+        {
+            "Inbox" => "#2E5E3E",
+            "Third-party" => "#6B4E1A",
+            "Orphaned" => "#6E2A2A",
+            _ => "#2A2A33"
+        };
 
         /// <summary>"PID (name)" for the parent column; "—" when Sysmon gave no parent image.</summary>
         [JsonIgnore]

@@ -41,6 +41,13 @@ namespace AutoCommand.Views
         private Regex _filter;
         private SpawnItem _selected;
         private DispatcherTimer _attributionTimer;
+        private bool _backfilled;
+
+        // "$(Arg0)"-style Task Scheduler placeholders, seen unexpanded when a
+        // trigger-fired start carries no argument — the tab explains them
+        // instead of leaving them to look like an error.
+        private static readonly Regex PlaceholderArgRegex =
+            new Regex(@"\$\(Arg\d+\)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public TaskHostSpawnView()
         {
@@ -68,6 +75,7 @@ namespace AutoCommand.Views
 
                 _taskAttribution = new TaskAttributionService();
                 _taskAttribution.OnError += _ => { }; // attribution gaps are non-fatal
+                _taskAttribution.OnAttributionUpdated += TaskAttribution_Updated;
 
                 // Task attribution lags the spawn event by seconds (separate
                 // event log); re-poll rows still missing their task name.
@@ -86,6 +94,7 @@ namespace AutoCommand.Views
             _attributionTimer.Start();
             _watching = true;
             ToggleWatchBtn.Content = "Stop Watch";
+            BackfillHistory();
             UpdateStatus();
         }
 
@@ -135,25 +144,84 @@ namespace AutoCommand.Views
                 _rows.RemoveAt(_rows.Count - 1);
                 if (_rowByPid.TryGetValue(oldest.Pid, out var row) && row == oldest) _rowByPid.Remove(oldest.Pid);
             }
-            TrySetTaskBadge(item);
+            TryEnrichRow(item);
             UpdateStatus();
         }
 
-        /// <summary>Resolves the task behind the spawn; badges the row with the task's short name.</summary>
-        private void TrySetTaskBadge(SpawnItem item)
+        /// <summary>
+        /// Replay the last few hours of both logs once, so the tab shows the
+        /// spawns that happened before it was opened — rows arrive with their
+        /// attribution already stitched on wherever the logs still retain it.
+        /// </summary>
+        private void BackfillHistory()
         {
-            if (!string.IsNullOrEmpty(item.Badge)) return;
-            var info = _taskAttribution.GetTaskForPid(item.Pid);
-            if (info == null || string.IsNullOrEmpty(info.TaskPath)) return;
+            if (_backfilled) return;
+            _backfilled = true;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var history = _taskAttribution.Backfill(TimeSpan.FromHours(6));
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (_paused)
+                    {
+                        foreach (var item in history) _pauseBuffer.Enqueue(item);
+                        return;
+                    }
+                    foreach (var item in history)
+                    {
+                        if (_rowByPid.ContainsKey(item.Pid)) continue; // already arrived live
+                        AddRow(item);
+                    }
+                    UpdateStatus();
+                });
+            });
+        }
 
-            item.SetDetailBadge(ShortTaskName(info.TaskPath));
+        /// <summary>Live attribution facts landing on a row we already show (watcher thread → UI).</summary>
+        private void TaskAttribution_Updated(TaskLaunchInfo info)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (info != null && _rowByPid.TryGetValue(info.ProcessId, out var row))
+                    TryEnrichRow(row);
+            });
+        }
+
+        /// <summary>
+        /// Pulls the latest attribution into the row — task badge, verdict
+        /// chip, outcome — and refreshes the pane when the row is selected.
+        /// </summary>
+        private void TryEnrichRow(SpawnItem item)
+        {
+            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            if (info == null) return;
+
+            if (string.IsNullOrEmpty(item.Badge) && !string.IsNullOrEmpty(info.TaskPath))
+                item.SetDetailBadge(ShortTaskName(info.TaskPath));
+            if (!string.IsNullOrEmpty(info.Verdict) && item.Verdict != info.Verdict)
+                item.SetVerdict(info.Verdict);
+
+            string outcome = BuildOutcome(info);
+            if (outcome != null && item.OutcomeDisplay != outcome)
+                item.SetOutcome(outcome);
+
             if (_selected != null && _selected.Pid == item.Pid) RenderTaskPane(item);
         }
 
         private void EnrichUnattributed()
         {
             foreach (var item in _rows.Take(300))
-                TrySetTaskBadge(item);
+                TryEnrichRow(item);
+        }
+
+        /// <summary>"rc 0 · 0.4 s"-style outcome; null until the scheduler reported a result.</summary>
+        private static string BuildOutcome(TaskLaunchInfo info)
+        {
+            if (info?.ReturnCode == null) return null;
+            string prefix = info.CompletedSuccessfully == false ? "failed rc " : "rc ";
+            return info.DurationSeconds is double secs
+                ? $"{prefix}{info.ReturnCode} · {secs:0.##} s"
+                : $"{prefix}{info.ReturnCode}";
         }
 
         private static string ShortTaskName(string taskPath)
@@ -209,7 +277,37 @@ namespace AutoCommand.Views
                 var options = new JsonSerializerOptions { WriteIndented = false };
                 using var writer = new StreamWriter(dialog.FileName, append: false);
                 foreach (var row in _rows)
-                    writer.WriteLine(JsonSerializer.Serialize(row, options));
+                {
+                    // Each record merges the row with its attribution — the
+                    // investigation travels with the export, not just the grid.
+                    var info = _taskAttribution.GetTaskForPid(row.Pid);
+                    var record = new
+                    {
+                        row.TimeUtc,
+                        row.Pid,
+                        row.Image,
+                        row.CommandLine,
+                        row.ParentPid,
+                        row.ParentImage,
+                        row.ParentCommandLine,
+                        row.User,
+                        row.IntegrityLevel,
+                        row.Hashes,
+                        row.Source,
+                        Task = info?.TaskPath,
+                        TaskVerdict = info?.Verdict,
+                        TriggerReason = info?.TriggerReason,
+                        ActionName = info?.ActionName,
+                        ReturnCode = info?.ReturnCode,
+                        StartedAt = info?.StartedAt,
+                        CompletedAt = info?.CompletedAt,
+                        HandlerClassId = info?.HandlerClassId,
+                        HandlerDll = info?.HandlerDll,
+                        HandlerDllCompany = info?.HandlerDllCompany,
+                        KnownTask = KnownTaskCatalog.Lookup(info?.TaskPath)?.Title
+                    };
+                    writer.WriteLine(JsonSerializer.Serialize(record, options));
+                }
                 MessageBox.Show($"Exported {_rows.Count} spawn record(s) to:\n{dialog.FileName}",
                     "Export", MessageBoxButton.OK, MessageBoxImage.Information);
             }
@@ -230,6 +328,59 @@ namespace AutoCommand.Views
         {
             if (SpawnGrid.SelectedItem is SpawnItem item)
                 Clipboard.SetText(JsonSerializer.Serialize(item, new JsonSerializerOptions { WriteIndented = true }));
+        }
+
+        /// <summary>
+        /// The whole investigation for one spawn as markdown on the clipboard:
+        /// the Sysmon record, the scheduler's attribution (task, trigger,
+        /// user), the handler-DLL resolution, the outcome, and the known-task
+        /// explanation — the same evidence chain the pane shows, in a form
+        /// suitable for an issue, a note, or the AI tab.
+        /// </summary>
+        private void InvestigateMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (SpawnGrid.SelectedItem is not SpawnItem item) return;
+
+            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            var known = KnownTaskCatalog.Lookup(info?.TaskPath);
+            var sb = new StringBuilder();
+            sb.AppendLine($"# taskhostw investigation — PID {item.Pid}");
+            sb.AppendLine($"When (local): {(item.TimeUtc == default ? "—" : item.TimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff"))}");
+            sb.AppendLine($"Command line: {item.CommandLine}");
+            if (PlaceholderArgRegex.IsMatch(item.CommandLine ?? string.Empty))
+                sb.AppendLine("Argument note: $(ArgN) is a Task Scheduler placeholder; unexpanded means the task was trigger-fired with no argument (normal).");
+            sb.AppendLine($"Parent: {item.ParentDisplay}");
+            sb.AppendLine($"Parent command line: {item.ParentCommandLine}");
+            sb.AppendLine($"User: {item.User} · Integrity: {item.IntegrityLevel}");
+            sb.AppendLine($"Hashes: {item.Hashes}");
+            sb.AppendLine($"Lifecycle: {item.LifeDisplay}");
+            sb.AppendLine();
+            sb.AppendLine($"Task: {info?.TaskPath ?? "(unresolved)"}");
+            sb.AppendLine($"Verdict: {info?.Verdict ?? "Unresolved"}");
+            sb.AppendLine($"Triggered by: {info?.TriggerReason ?? "—"}");
+            sb.AppendLine($"Runs as: {info?.UserContext ?? "—"}");
+            if (!string.IsNullOrEmpty(info?.ActionName)) sb.AppendLine($"Action: {info.ActionName}");
+            if (!string.IsNullOrEmpty(info?.HandlerClassId)) sb.AppendLine($"COM handler: {info.HandlerClassId}");
+            if (!string.IsNullOrEmpty(info?.HandlerDll))
+            {
+                string dllDetail = info.HandlerDllExists == true ? "exists" : "MISSING";
+                if (!string.IsNullOrEmpty(info.HandlerDllVersion)) dllDetail += $"; {info.HandlerDllVersion}";
+                if (!string.IsNullOrEmpty(info.HandlerDllCompany)) dllDetail += $"; {info.HandlerDllCompany}";
+                sb.AppendLine($"Handler DLL: {info.HandlerDll} ({dllDetail})");
+            }
+            sb.AppendLine($"Outcome: {BuildOutcome(info) ?? (item.Exited ? "exited (no completion event)" : "running")}");
+            if (known != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"What it does: {known.Title}");
+                sb.AppendLine(known.Explanation);
+                if (!string.IsNullOrEmpty(known.Note)) sb.AppendLine($"Note: {known.Note}");
+            }
+            sb.AppendLine();
+            sb.AppendLine($"Collected {DateTime.Now:yyyy-MM-dd HH:mm:ss} by AutoCommand · Taskhostw Spawns");
+
+            Clipboard.SetText(sb.ToString());
+            StatusText.Text = $"📋 Investigation for PID {item.Pid} copied to the clipboard";
         }
 
         private void TracePidMenuItem_Click(object sender, RoutedEventArgs e)
@@ -293,6 +444,10 @@ namespace AutoCommand.Views
             AddDetail("PID", item.Pid.ToString());
             AddDetail("Image", item.Image);
             AddDetail("Command line", item.CommandLine);
+            if (PlaceholderArgRegex.IsMatch(item.CommandLine ?? string.Empty))
+                AddDetail("Argument note",
+                    "$(ArgN) is a Task Scheduler argument placeholder. Unexpanded — as here — it means the task was " +
+                    "started by its trigger with no argument; normal, not an error or injection.");
             AddDetail("Parent", item.ParentDisplay);
             AddDetail("Parent command line", item.ParentCommandLine);
             AddDetail("User", item.User);
@@ -328,19 +483,57 @@ namespace AutoCommand.Views
 
         private void RenderTaskPane(SpawnItem item)
         {
-            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            var info = item == null ? null : _taskAttribution.GetTaskForPid(item.Pid);
             TaskPathText.Text = info?.TaskPath is string path && path.Length > 0 ? path : "—";
             TaskUserText.Text = !string.IsNullOrEmpty(info?.UserContext) ? info.UserContext : "—";
+            TaskTriggerText.Text = !string.IsNullOrEmpty(info?.TriggerReason) ? info.TriggerReason : "—";
+
+            string outcome = BuildOutcome(info);
+            TaskOutcomeText.Text = outcome ?? (item != null && item.Exited ? "exited (no completion event)" : "—");
+
+            if (!string.IsNullOrEmpty(info?.Verdict))
+            {
+                TaskVerdictText.Text = info.Verdict;
+                TaskVerdictText.Foreground = info.Verdict switch
+                {
+                    "Inbox" => System.Windows.Media.Brushes.MediumSeaGreen,
+                    "Orphaned" => System.Windows.Media.Brushes.IndianRed,
+                    "Third-party" => System.Windows.Media.Brushes.Khaki,
+                    _ => FindResource("TextPrimaryBrush") as System.Windows.Media.Brush
+                };
+            }
+            else
+            {
+                TaskVerdictText.Text = "—";
+                TaskVerdictText.Foreground = FindResource("TextSecondaryBrush") as System.Windows.Media.Brush;
+            }
 
             if (info?.HandlerClassId != null)
             {
+                string dllDetail = info.HandlerDllExists == true && !string.IsNullOrEmpty(info.HandlerDllVersion)
+                    ? $" ({info.HandlerDllVersion})"
+                    : string.Empty;
                 TaskHandlerText.Text = info.HandlerDllExists == true
-                    ? $"{info.HandlerDll}  (CLSID {info.HandlerClassId})"
+                    ? $"{info.HandlerDll}{dllDetail}  (CLSID {info.HandlerClassId})"
                     : $"CLSID {info.HandlerClassId} — handler DLL not registered (leftover of uninstalled software)";
             }
             else
             {
                 TaskHandlerText.Text = "—";
+            }
+
+            var known = KnownTaskCatalog.Lookup(info?.TaskPath);
+            if (known != null)
+            {
+                string text = $"{known.Title}\n{known.Explanation}";
+                if (!string.IsNullOrEmpty(known.Note)) text += $"\n\nNote: {known.Note}";
+                KnownTaskText.Text = text;
+                KnownTaskText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                KnownTaskText.Text = string.Empty;
+                KnownTaskText.Visibility = Visibility.Collapsed;
             }
 
             if (string.IsNullOrEmpty(info?.TaskPath))
@@ -364,7 +557,13 @@ namespace AutoCommand.Views
         {
             TaskPathText.Text = "—";
             TaskUserText.Text = "—";
+            TaskTriggerText.Text = "—";
+            TaskOutcomeText.Text = "—";
+            TaskVerdictText.Text = "—";
+            TaskVerdictText.Foreground = FindResource("TextSecondaryBrush") as System.Windows.Media.Brush;
             TaskHandlerText.Text = "—";
+            KnownTaskText.Text = string.Empty;
+            KnownTaskText.Visibility = Visibility.Collapsed;
             TaskSummaryText.Text = "Select a spawn row — task details appear here as the event logs catch up.";
         }
 

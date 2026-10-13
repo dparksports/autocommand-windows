@@ -66,6 +66,7 @@
             </DataGrid.RowStyle>
             <DataGrid.ContextMenu>
                 <ContextMenu>
+                    <MenuItem x:Name="InvestigateMenuItem" Header="🧾 Copy investigation report" Click="InvestigateMenuItem_Click"/>
                     <MenuItem x:Name="TracePidMenuItem" Header="🔎 Trace: how was this PID spawned?" Click="TracePidMenuItem_Click"/>
                     <MenuItem x:Name="CopyRowMenuItem" Header="📋 Copy row as JSON" Click="CopyRowMenuItem_Click"/>
                 </ContextMenu>
@@ -83,8 +84,21 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="Verdict" Width="90" SortMemberPath="Verdict">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <Border CornerRadius="8" Padding="6,1" HorizontalAlignment="Left"
+                                    Background="{Binding VerdictBackground}" Visibility="{Binding VerdictVisibility}"
+                                    ToolTip="Inbox: Microsoft task running Microsoft code · Third-party: custom task or handler outside the system directories · Orphaned: handler DLL is gone">
+                                <TextBlock Text="{Binding Verdict}" FontSize="10" Foreground="#E5C77B"/>
+                            </Border>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="60"/>
                 <DataGridTextColumn Header="Life" Binding="{Binding LifeDisplay}" Width="60"/>
+                <DataGridTextColumn Header="Exit" Binding="{Binding OutcomeDisplay}" Width="100"
+                                    SortMemberPath="OutcomeDisplay"/>
                 <DataGridTextColumn Header="Command Line" Binding="{Binding CommandLine}" Width="380">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">
@@ -123,35 +137,61 @@
 
             <!-- Task attribution -->
             <Border Grid.Column="1" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4" Padding="10">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="Scheduled task attribution (the 'why')" FontWeight="SemiBold" Margin="0,0,0,6"
-                               ToolTip="Resolved from the Sysmon/task-scheduler event logs: which task launched this taskhostw, in what user context, and — for COM-handler tasks — which DLL actually runs."/>
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,4">
-                        <TextBlock Text="Task:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                        <TextBlock x:Name="TaskPathText" Text="—" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,4">
-                        <TextBlock Text="Runs as:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"/>
-                        <TextBlock x:Name="TaskUserText" Text="—" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,6">
-                        <TextBlock Text="Handler:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"
-                                   ToolTip="COM-handler tasks run a DLL instead of a command line."/>
-                        <TextBlock x:Name="TaskHandlerText" Text="—" TextWrapping="Wrap"/>
-                    </StackPanel>
-                    <TextBox Grid.Row="4" x:Name="TaskSummaryText" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
-                             Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
-                             BorderBrush="{DynamicResource BorderBrush}" VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto" TextWrapping="Wrap"
-                             Text="Select a spawn row — task details appear here as the event logs catch up."/>
-                </Grid>
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Scheduled task attribution (the 'why')" FontWeight="SemiBold" Margin="0,0,0,6"
+                                   ToolTip="Resolved from the Sysmon/task-scheduler event logs: which task launched this taskhostw, why it fired, in what user context, and — for COM-handler tasks — which DLL actually runs."/>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Task:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock x:Name="TaskPathText" Text="—" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Runs as:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                            <TextBlock x:Name="TaskUserText" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Handler:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       ToolTip="COM-handler tasks run a DLL instead of a command line."/>
+                            <TextBlock x:Name="TaskHandlerText" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Why now:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       ToolTip="The Task Scheduler event that fired this instance: user logon, its schedule/timer, or a subscribed event."/>
+                            <TextBlock x:Name="TaskTriggerText" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Outcome:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       ToolTip="The action's return code and run duration once the scheduler reports completion. Return code 0 in under a second is the 'checked and had nothing to do' signature."/>
+                            <TextBlock x:Name="TaskOutcomeText" Text="—" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="6" Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="Verdict:" Width="90" Foreground="{DynamicResource TextSecondaryBrush}"
+                                       ToolTip="Inbox: Microsoft task path running code from the system directories. Third-party: task outside \Microsoft, or a handler DLL outside them. Orphaned: the handler DLL is no longer registered."/>
+                            <TextBlock x:Name="TaskVerdictText" Text="—" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <TextBox Grid.Row="7" x:Name="KnownTaskText" IsReadOnly="True" FontFamily="Consolas" FontSize="11" Margin="0,0,0,6"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource BorderBrush}" VerticalScrollBarVisibility="Auto"
+                                 TextWrapping="Wrap" MaxHeight="110" Visibility="Collapsed"
+                                 ToolTip="From Assets/known-tasks.json — extend the file to teach the tab new tasks."/>
+                        <TextBox Grid.Row="8" x:Name="TaskSummaryText" IsReadOnly="True" FontFamily="Consolas" FontSize="11" MinHeight="70"
+                                 Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
+                                 BorderBrush="{DynamicResource BorderBrush}" VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto" TextWrapping="Wrap"
+                                 Text="Select a spawn row — task details appear here as the event logs catch up."/>
+                    </Grid>
+                </ScrollViewer>
             </Border>
         </Grid>
     </Grid>

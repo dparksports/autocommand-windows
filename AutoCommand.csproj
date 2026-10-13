@@ -47,6 +47,11 @@
     <Content Include="Assets\telemetry_rules.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- Plain-English explanations for known scheduled tasks (Taskhostw
+         Spawns tab). User-extensible: add path-keyed entries and restart. -->
+    <Content Include="Assets\known-tasks.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
@@ -56,6 +61,7 @@
     <!-- Self-test harness: links the app's services itself and has its own
          Main() (same reason as ScratchTest) -->
     <Compile Remove="PyTraceSelfTest\**" />
+    <Compile Remove="TaskAttributionSelfTest\**" />
   </ItemGroup>
 
   <!-- Filter out Linux .so native binaries when publishing for Windows win-x64 -->

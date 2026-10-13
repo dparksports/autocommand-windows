@@ -127,15 +127,49 @@ namespace AutoCommand.Services
         {
             try
             {
-                var fields = ParseIfMatched(e, _xmlKeyword);
-                if (fields == null) return;
+                var item = ParseSpawnRecord(e.EventRecord, _imageFilter, _xmlKeyword);
+                if (item == null) return;
+
+                lock (_trackedLock)
+                {
+                    PairWithLauncher(item);
+
+                    // Terminate event already observed for this pid — the
+                    // process was shorter than the watcher round-trip.
+                    if (_earlyExits.Remove(item.Pid)) item.Exited = true;
+
+                    PruneIfNeeded();
+                    _tracked[item.Pid] = item;
+                }
+                OnSpawn?.Invoke(item);
+            }
+            catch { /* a malformed record never takes the watcher down */ }
+        }
+
+        /// <summary>
+        /// Parse a Sysmon EID 1 record into a SpawnItem — null when the record
+        /// is not a process-create, fails the image filter, or has no parseable
+        /// pid. Shared by the live watcher and the taskhostw tab's historical
+        /// backfill (TaskAttributionService.Backfill) so both paths build
+        /// identical rows from the same field parsing.
+        /// </summary>
+        public static SpawnItem ParseSpawnRecord(EventRecord record, Func<string, bool> imageFilter, string xmlKeyword)
+        {
+            try
+            {
+                if (record == null || record.Id != 1) return null;
+                string xml = record.ToXml();
+                if (xmlKeyword != null && xml.IndexOf(xmlKeyword, StringComparison.OrdinalIgnoreCase) < 0) return null;
+
+                var fields = ParseFields(xml);
+                if (fields == null || !imageFilter(GetValue(fields, "Image"))) return null;
 
                 int pid = ParsePid(GetValue(fields, "ProcessId"));
-                if (pid <= 0) return;
+                if (pid <= 0) return null;
 
-                var item = new SpawnItem
+                return new SpawnItem
                 {
-                    TimeUtc = ParseUtcTime(GetValue(fields, "UtcTime"), e.EventRecord?.TimeCreated),
+                    TimeUtc = ParseUtcTime(GetValue(fields, "UtcTime"), record.TimeCreated),
                     Pid = pid,
                     Image = GetValue(fields, "Image"),
                     CommandLine = GetValue(fields, "CommandLine"),
@@ -147,21 +181,8 @@ namespace AutoCommand.Services
                     Hashes = GetValue(fields, "Hashes"),
                     Source = "sysmon"
                 };
-
-                lock (_trackedLock)
-                {
-                    PairWithLauncher(item);
-
-                    // Terminate event already observed for this pid — the
-                    // process was shorter than the watcher round-trip.
-                    if (_earlyExits.Remove(pid)) item.Exited = true;
-
-                    PruneIfNeeded();
-                    _tracked[pid] = item;
-                }
-                OnSpawn?.Invoke(item);
             }
-            catch { /* a malformed record never takes the watcher down */ }
+            catch { return null; }
         }
 
         /// <summary>
@@ -289,6 +310,12 @@ namespace AutoCommand.Services
             string xml = e.EventRecord.ToXml();
             if (xml.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0) return null;
 
+            var fields = ParseFields(xml);
+            return fields != null && _imageFilter(GetValue(fields, "Image")) ? fields : null;
+        }
+
+        private static Dictionary<string, string> ParseFields(string xml)
+        {
             var doc = XDocument.Parse(xml);
             XNamespace ns = "http://schemas.microsoft.com/win/2004/08/events/event";
             var eventData = doc.Root?.Element(ns + "EventData");
@@ -301,7 +328,7 @@ namespace AutoCommand.Services
                 if (name != null && !fields.ContainsKey(name)) fields[name] = data.Value;
             }
 
-            return _imageFilter(GetValue(fields, "Image")) ? fields : null;
+            return fields;
         }
 
         private static string GetValue(Dictionary<string, string> fields, string name) =>
