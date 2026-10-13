@@ -17,9 +17,13 @@ namespace AutoCommand.Services
     /// the spawning pid). EID 1 fires for every process creation on the
     /// machine, so records are pre-filtered by a cheap substring scan and
     /// discarded early unless the image passes the caller's filter.
+    /// <see cref="Backfill"/> replays the same channel's recent records so a
+    /// tab opened after the fact still shows what ran.
     /// </summary>
     public class ImageSpawnWatcherService : IDisposable
     {
+        private const string ChannelName = "Microsoft-Windows-Sysmon/Operational";
+
         private EventLogWatcher _spawnWatcher;
         private EventLogWatcher _exitWatcher;
         private EventLogWatcher _netWatcher;
@@ -115,23 +119,94 @@ namespace AutoCommand.Services
         private static EventLogWatcher Watch(string xpath, EventHandler<EventRecordWrittenEventArgs> handler)
         {
             var watcher = new EventLogWatcher(
-                new EventLogQuery("Microsoft-Windows-Sysmon/Operational", PathType.LogName, xpath));
+                new EventLogQuery(ChannelName, PathType.LogName, xpath));
             watcher.EventRecordWritten += handler;
             watcher.Enabled = true;
             return watcher;
+        }
+
+        // ── Historical replay ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Replays the last <paramref name="window"/> of EID 1 / EID 5 records
+        /// from the Sysmon channel through the same handlers the live watchers
+        /// use — so a tab opened after the fact shows what already ran, with
+        /// parentage, venv pairing and Exited stamps intact. Spawns the live
+        /// watcher already delivered are skipped (pid-keyed), so racing the
+        /// live feed never double-adds a row. Returns the number of spawn rows
+        /// replayed.
+        /// </summary>
+        public int Backfill(TimeSpan window, int maxRows = 400)
+        {
+            int replayed = 0;
+            try
+            {
+                string xpath =
+                    "*[System[(EventID=1 or EventID=5) and TimeCreated[timediff(@SystemTime) <= " +
+                    Math.Max(0, (int)window.TotalMilliseconds) + "]]]";
+
+                var records = new List<(DateTime time, EventRecord rec)>();
+                using (var reader = new EventLogReader(new EventLogQuery(ChannelName, PathType.LogName, xpath)))
+                {
+                    EventRecord rec;
+                    while ((rec = reader.ReadEvent()) != null)
+                        records.Add((rec.TimeCreated?.ToUniversalTime() ?? DateTime.MinValue, rec));
+                }
+
+                // Newest-first for the cap, oldest-first for the replay
+                var spawns = records.Where(r => r.rec.Id == 1).OrderByDescending(r => r.time).Take(maxRows)
+                                    .OrderBy(r => r.time).ToList();
+                var exits = records.Where(r => r.rec.Id == 5).Select(r => r.rec);
+                var replay = spawns.Select(r => r.rec)
+                    .Concat(exits)
+                    .OrderBy(r => r.TimeCreated?.ToUniversalTime() ?? DateTime.MinValue)
+                    .ToList();
+
+                foreach (var rec in replay)
+                {
+                    if (rec.Id == 1)
+                    {
+                        if (HandleSpawnRecord(rec, isReplay: true)) replayed++;
+                    }
+                    else
+                    {
+                        HandleExitRecord(rec);
+                    }
+                }
+                foreach (var (_, rec) in records) rec.Dispose();
+            }
+            catch (EventLogNotFoundException)
+            {
+                OnError?.Invoke("Sysmon is not installed. Install it from the Sysmon Audit tab — spawn tracing needs it.");
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke($"Spawn history replay failed: {ex.Message}");
+            }
+            return replayed;
         }
 
         // ── EID 1: process create ────────────────────────────────────────────
 
         private void Spawn_EventRecordWritten(object sender, EventRecordWrittenEventArgs e)
         {
+            if (e.EventRecord == null) return;
+            HandleSpawnRecord(e.EventRecord, isReplay: false);
+        }
+
+        /// <summary>Returns true when the record produced a spawn.</summary>
+        private bool HandleSpawnRecord(EventRecord record, bool isReplay)
+        {
             try
             {
-                var item = ParseSpawnRecord(e.EventRecord, _imageFilter, _xmlKeyword);
-                if (item == null) return;
+                var item = ParseSpawnRecord(record, _imageFilter, _xmlKeyword);
+                if (item == null) return false;
 
                 lock (_trackedLock)
                 {
+                    // Live watcher won the race for this pid — never double-add
+                    if (isReplay && _tracked.ContainsKey(item.Pid)) return false;
+
                     PairWithLauncher(item);
 
                     // Terminate event already observed for this pid — the
@@ -142,8 +217,10 @@ namespace AutoCommand.Services
                     _tracked[item.Pid] = item;
                 }
                 OnSpawn?.Invoke(item);
+                return true;
             }
             catch { /* a malformed record never takes the watcher down */ }
+            return false;
         }
 
         /// <summary>
@@ -238,9 +315,15 @@ namespace AutoCommand.Services
 
         private void Exit_EventRecordWritten(object sender, EventRecordWrittenEventArgs e)
         {
+            if (e.EventRecord == null) return;
+            try { HandleExitRecord(e.EventRecord); } catch { }
+        }
+
+        private void HandleExitRecord(EventRecord record)
+        {
             try
             {
-                var fields = ParseIfMatched(e, _xmlKeyword);
+                var fields = ParseIfMatchedRecord(record, _xmlKeyword);
                 if (fields == null) return;
 
                 int pid = ParsePid(GetValue(fields, "ProcessId"));
@@ -307,7 +390,13 @@ namespace AutoCommand.Services
         private Dictionary<string, string> ParseIfMatched(EventRecordWrittenEventArgs e, string keyword)
         {
             if (e.EventRecord == null) return null;
-            string xml = e.EventRecord.ToXml();
+            return ParseIfMatchedRecord(e.EventRecord, keyword);
+        }
+
+        private Dictionary<string, string> ParseIfMatchedRecord(EventRecord record, string keyword)
+        {
+            if (record == null) return null;
+            string xml = record.ToXml();
             if (xml.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0) return null;
 
             var fields = ParseFields(xml);

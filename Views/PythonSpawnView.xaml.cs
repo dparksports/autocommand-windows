@@ -36,6 +36,7 @@ namespace AutoCommand.Views
         private bool _initialized;
         private bool _watching;
         private bool _paused;
+        private bool _backfilled;
         private readonly Queue<SpawnItem> _pauseBuffer = new();
         private Regex _filter;
         private SpawnItem _selected;
@@ -103,6 +104,30 @@ namespace AutoCommand.Views
             _watching = true;
             ToggleWatchBtn.Content = "Stop Watch";
             UpdateStatus();
+            BackfillHistory();
+        }
+
+        /// <summary>
+        /// The live watchers only deliver what happens while this tab is the
+        /// selected one — pythons that ran while the user was elsewhere would
+        /// otherwise never appear. Replays the last hours of Sysmon EID 1/5
+        /// through the same handlers (parentage, venv pairing, Exited stamps),
+        /// deduped against rows that already arrived live. Same pattern as the
+        /// taskhostw tab.
+        /// </summary>
+        private void BackfillHistory()
+        {
+            if (_backfilled) return;
+            _backfilled = true;
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                int seeded = _watcher.Backfill(TimeSpan.FromHours(6));
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (seeded > 0)
+                        StatusText.Text = $"Loaded {seeded} recent spawn(s) from the last 6 h of Sysmon history";
+                });
+            });
         }
 
         private void StopWatching()
