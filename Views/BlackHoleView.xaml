@@ -40,6 +40,18 @@
                 <TextBlock x:Name="ProtectionText" Text="Reading the opt-out knowledge base…"
                            TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <ComboBox x:Name="RuleCombo" Width="300"
+                              ToolTip="Detected apps from the opt-out knowledge base — act on them without leaving this tab."/>
+                    <Button x:Name="OptOutRuleBtn" Content="Opt out" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0"
+                            Click="OptOutRuleBtn_Click" ToolTip="Applies the vendor's own opt-out switch — written in the exact type the app reads, verified by re-reading, restart-aware."/>
+                    <Button x:Name="BlockLogRuleBtn" Content="Block &amp; log" Margin="8,0,0,0" Click="BlockLogRuleBtn_Click"
+                            ToolTip="Pins the telemetry domain at 127.0.0.1 (sinkhole): every attempt, from any process, is denied here — and logged in the feed below."/>
+                    <Button x:Name="RemoveBlockBtn" Content="Remove block" Margin="8,0,0,0" Click="RemoveBlockBtn_Click"
+                            ToolTip="Removes the network pin (works for pins created here or in Shields Up)."/>
+                    <Button x:Name="RevertOptOutBtn" Content="Revert opt-out" Margin="8,0,0,0" Click="RevertOptOutBtn_Click"
+                            ToolTip="Restores the setting that was in place before the opt-out."/>
+                </StackPanel>
             </StackPanel>
         </Border>
 

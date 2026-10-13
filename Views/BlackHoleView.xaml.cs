@@ -44,6 +44,13 @@ namespace AutoCommand.Views
             public int Count { get; set; }
         }
 
+        private sealed class RuleOption
+        {
+            public string Text { get; set; }
+            public TelemetryRuleStatus Status { get; set; }
+            public override string ToString() => Text;
+        }
+
         public BlackHoleView()
         {
             InitializeComponent();
@@ -128,8 +135,8 @@ namespace AutoCommand.Views
                     ? "No known-telemetry apps detected on this machine."
                     : string.Join("\n", lines) +
                       "\nA flag stops new processes only; a pin stops everything immediately — and only pinned attempts appear in this tab.";
-                if (!Dispatcher.CheckAccess()) _ = Dispatcher.BeginInvoke(() => ProtectionText.Text = text);
-                else ProtectionText.Text = text;
+                if (!Dispatcher.CheckAccess()) _ = Dispatcher.BeginInvoke(() => { ProtectionText.Text = text; PopulateRuleCombo(statuses); });
+                else { ProtectionText.Text = text; PopulateRuleCombo(statuses); }
             }
             catch (Exception ex)
             {
@@ -162,6 +169,95 @@ namespace AutoCommand.Views
             catch { return 0; }
         }
 
+        // ── Rule actions — the ladder without leaving this tab ────────────
+
+        private void PopulateRuleCombo(List<TelemetryRuleStatus> statuses)
+        {
+            string selectedId = (RuleCombo.SelectedItem as RuleOption)?.Status?.Rule?.Id;
+            RuleCombo.ItemsSource = statuses
+                .Where(s => s.Detected && s.Rule != null)
+                .Select(s => new RuleOption { Text = $"{s.Rule.AppName} — {s.StateText}", Status = s })
+                .ToList();
+            if (RuleCombo.Items.Count > 0)
+            {
+                RuleCombo.SelectedIndex = Math.Max(0, (RuleCombo.ItemsSource as List<RuleOption>)
+                    .FindIndex(o => o.Status.Rule.Id == selectedId));
+            }
+        }
+
+        private TelemetryRule SelectedRule() =>
+            (RuleCombo.SelectedItem as RuleOption)?.Status?.Rule;
+
+        private async void OptOutRuleBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var rule = SelectedRule();
+            if (rule == null) return;
+            if (MessageBox.Show(
+                    $"Turn off telemetry for {rule.AppName}?\n\n{rule.Mechanism}\n\nRisk: {rule.RiskNote}\n" +
+                    "The current setting is snapshotted first and can be reverted.",
+                    "Opt out", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+                return;
+
+            var (ok, message) = await _rules.ApplyOptOutAsync(rule);
+            MessageBox.Show(message, ok ? "Opted out" : "Failed", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            RefreshAll();
+        }
+
+        private async void BlockLogRuleBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var rule = SelectedRule();
+            if (rule?.Enforce == null)
+            {
+                MessageBox.Show("This rule has no network-block action defined.", "Block & log",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (MessageBox.Show(
+                    $"Block {rule.AppName} at the network — and log every attempt here?\n\n" +
+                    $"This pins {string.Join(", ", rule.Enforce.Domains)} at 127.0.0.1 in the hosts file. Every attempt, " +
+                    "from any process including ones started before any opt-out, is denied — and caught in the feed below " +
+                    "with its hostname, process, PID and command line.\n\n" +
+                    "Know what this touches:\n" +
+                    "• System-wide — every program on this PC, including browsers, fails to reach the domain\n" +
+                    "• No functional impact on this app — its telemetry sender already treats failure as harmless\n" +
+                    "• Reversible here or in Shields Up; DNS is flushed so it applies immediately",
+                    "Block & log", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+                return;
+
+            var (ok, message) = await _rules.ApplyEnforceAsync(rule, HostsTelemetryPins.SinkholeAddress);
+            if (ok) SinkholeService.Instance.EnsureRunningForCurrentPins();
+            MessageBox.Show(message, ok ? "Network block" : "Failed", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            RefreshAll();
+        }
+
+        private async void RemoveBlockBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var rule = SelectedRule();
+            if (rule?.Enforce == null) return;
+            if (MessageBox.Show(
+                    $"Remove the network block for {rule.AppName}?\n\nThe hosts pin is removed (works for pins created " +
+                    "here or in Shields Up) and the DNS cache is flushed. Opt-out flags are untouched.",
+                    "Remove block", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+                return;
+
+            var (ok, message) = await _rules.RevertEnforceAsync(rule);
+            MessageBox.Show(message, ok ? "Network block removed" : "Failed", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            RefreshAll();
+        }
+
+        private async void RevertOptOutBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var rule = SelectedRule();
+            if (rule == null) return;
+            var (ok, message) = await _rules.RevertAsync(rule);
+            MessageBox.Show(message, ok ? "Reverted" : "Revert unavailable", MessageBoxButton.OK,
+                ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            RefreshAll();
+        }
+
         private void RefreshState()
         {
             var pins = HostsTelemetryPins.ReadLive();
@@ -182,6 +278,14 @@ namespace AutoCommand.Views
             bool sinkhole = HostsTelemetryPins.AnySinkhole(pins);
             SinkholeToggle.IsEnabled = true;
             SinkholeToggle.IsChecked = sinkhole;
+
+            // A sinkhole pin can appear while the app is already running —
+            // created from the rule actions above or by Shields Up's block
+            // offer — so engage the listener without waiting for a restart.
+            // PortBusy is deliberately left alone: retrying every tick would
+            // hammer a port someone else owns.
+            if (sinkhole && SinkholeService.Instance.Status is not (SinkholeStatus.Listening or SinkholeStatus.PortBusy))
+                SinkholeService.Instance.EnsureRunningForCurrentPins();
 
             string sink = SinkholeService.Instance.Status switch
             {

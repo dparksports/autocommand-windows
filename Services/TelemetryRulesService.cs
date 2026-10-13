@@ -124,11 +124,20 @@ namespace AutoCommand.Services
     public class TelemetryRulesService
     {
         private const string RulesFile = "Assets\\telemetry_rules.json";
-        private const string StateFile = "telemetry_state.json";
+        private static string StateFile => System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "telemetry_state.json");
 
         // Hosts lines are written under a marker carrying the rule id so the
         // app removes only its own lines — never user edits — on revert.
         private const string HostsMarkerPrefix = "# AutoCommand telemetry-block ";
+
+        // Removal and status scan BOTH apps' markers: a pin created by
+        // AutoCommand's Black Hole tab must be removable here, and vice
+        // versa — "act from either app" dies at brand-locked markers.
+        private static readonly string[] AllMarkerPrefixes =
+        {
+            "# AutoCommand telemetry-block ",
+            "# ShieldsUp telemetry-block ",
+        };
 
         private sealed class ChangeRecord
         {
@@ -419,12 +428,14 @@ namespace AutoCommand.Services
         // -----------------------------------------------------------------------
 
         /// <summary>
-        /// Pins the rule's telemetry domains to 0.0.0.0 in the hosts file under a
-        /// marker line carrying the rule id. For targets like ultralytics this is
+        /// Pins the rule's telemetry domains in the hosts file under a marker
+        /// line carrying the rule id. For targets like ultralytics this is
         /// functionally free — its telemetry POST swallows network errors — but it
         /// is system-wide for the domain, so browsers' requests to it fail too.
+        /// Pass <paramref name="addressOverride"/> ("127.0.0.1") to pin in
+        /// sinkhole mode so AutoCommand's Black Hole tab can log each attempt.
         /// </summary>
-        public async Task<(bool Success, string Message)> ApplyEnforceAsync(TelemetryRule rule)
+        public async Task<(bool Success, string Message)> ApplyEnforceAsync(TelemetryRule rule, string addressOverride = null)
         {
             if (rule?.Enforce == null) return (false, "Rule has no network-block action.");
             if (!string.Equals(rule.Enforce.Type, "hosts", StringComparison.OrdinalIgnoreCase))
@@ -442,7 +453,8 @@ namespace AutoCommand.Services
                     : new List<string>();
                 if (lines.Count > 0 && lines[^1].Trim().Length > 0) lines.Add("");
                 lines.Add($"{HostsMarkerPrefix}{rule.Id}");
-                lines.AddRange(rule.Enforce.Domains.Select(d => $"{NormalizePinAddress(rule.Enforce.Address)} {d}"));
+                lines.AddRange(rule.Enforce.Domains.Select(d =>
+                    $"{NormalizePinAddress(addressOverride ?? rule.Enforce.Address)} {d}"));
                 File.WriteAllLines(hosts, lines);
 
                 RecordChange(rule.Id, "hosts", hosts, rule.Id, null);
@@ -470,12 +482,11 @@ namespace AutoCommand.Services
                 if (!File.Exists(hosts) || !HostsBlockActive(rule))
                     return (true, $"{rule.AppName}: no network block present.");
 
-                string marker = $"{HostsMarkerPrefix}{rule.Id}";
                 var blockedHosts = rule.Enforce.Domains.ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var lines = File.ReadAllLines(hosts).ToList();
                 for (int i = 0; i < lines.Count; )
                 {
-                    if (lines[i].Trim() == marker)
+                    if (IsMarkerForRule(lines[i].Trim(), rule.Id))
                     {
                         lines.RemoveAt(i);
                         // Match "<address> <hostname>" for the rule's domains at
@@ -528,11 +539,14 @@ namespace AutoCommand.Services
             {
                 string hosts = HostsPath();
                 if (!File.Exists(hosts)) return false;
-                string marker = $"{HostsMarkerPrefix}{rule.Id}";
-                return File.ReadLines(hosts).Any(l => l.Trim() == marker);
+                return File.ReadLines(hosts).Any(l => IsMarkerForRule(l.Trim(), rule.Id));
             }
             catch { return false; }
         }
+
+        /// <summary>Matches a marker line from either app for the given rule id.</summary>
+        private static bool IsMarkerForRule(string line, string ruleId) =>
+            AllMarkerPrefixes.Any(p => string.Equals(line, p + ruleId, StringComparison.OrdinalIgnoreCase));
 
         private static async Task FlushDnsCacheAsync()
         {
