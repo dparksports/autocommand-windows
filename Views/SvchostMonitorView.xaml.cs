@@ -496,6 +496,20 @@ namespace AutoCommand.Views
             }
         }
 
+        private void SvchostGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            // Double-clicking a row opens the spawn-chain trace — the same
+            // PID inquiry as the context menu's "Trace" item. Clicks on
+            // column headers or empty space fall through to nothing.
+            if (e.OriginalSource is DependencyObject source &&
+                ItemsControl.ContainerFromElement(SvchostGrid, source) is DataGridRow row &&
+                row.Item is SvchostMonitorItem item)
+            {
+                row.IsSelected = true;
+                OpenPidTrace(item.ProcessId, item);
+            }
+        }
+
         // -----------------------------------------------------------------------
         // PID inquiry — provenance tracing ("how was this spawned?")
         // -----------------------------------------------------------------------

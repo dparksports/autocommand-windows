@@ -121,7 +121,8 @@
 
         <!-- Connections Grid -->
         <DataGrid Grid.Row="2" x:Name="SvchostGrid" SelectionMode="Single"
-                  PreviewMouseRightButtonDown="SvchostGrid_PreviewMouseRightButtonDown">
+                  PreviewMouseRightButtonDown="SvchostGrid_PreviewMouseRightButtonDown"
+                  MouseDoubleClick="SvchostGrid_MouseDoubleClick">
             <DataGrid.RowStyle>
                 <!-- High transmitters tint red and pin to the top (live
                      sorting); rows with no traffic for 5+ minutes fade into
