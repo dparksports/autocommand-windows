@@ -98,6 +98,11 @@ namespace AutoCommand.Services
                     ? Path.GetFileName(flow.Image)
                     : "(unattributed)";
 
+                // Honor Process Monitor's ignore list: a process the user told
+                // the app to stop listing stays out of the pattern table too.
+                if (process != "(unattributed)" && SysmonWatcherService.IsIgnoredByFile(process))
+                    return;
+
                 var stat = _stats.GetOrAdd($"{process}|{destIp}", _ => new TrafficStat(process, destIp));
                 stat.Add(tx, rx, destPort, flow.Pid, flow.EndedUtc);
                 Interlocked.Increment(ref _flowsAggregated);
@@ -134,9 +139,17 @@ namespace AutoCommand.Services
         // View API
         // -----------------------------------------------------------------------
 
-        /// <summary>All rows, biggest lifetime totals first.</summary>
+        /// <summary>
+        /// All rows, biggest lifetime totals first. Rows for processes on the
+        /// Process Monitor ignore list are hidden (their aggregation resumes
+        /// if the process is ever un-ignored; the history stays intact).
+        /// </summary>
         public IReadOnlyList<TrafficStat> Snapshot() =>
-            _stats.Values.OrderByDescending(s => s.TxBytes + s.RxBytes).ToList();
+            _stats.Values
+                .Where(s => s.ProcessName == "(unattributed)" ||
+                            !SysmonWatcherService.IsIgnoredByFile(s.ProcessName))
+                .OrderByDescending(s => s.TxBytes + s.RxBytes)
+                .ToList();
 
         /// <summary>Clears everything and removes the persisted state.</summary>
         public void Reset()

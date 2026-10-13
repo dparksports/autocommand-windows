@@ -5,7 +5,7 @@
              Loaded="UserControl_Loaded" Unloaded="UserControl_Unloaded">
 
     <UserControl.Resources>
-        <converters:GroupSizeExpanderConverter x:Key="GroupSizeExpander"/>
+        <converters:GroupExpandedStateConverter x:Key="GroupExpandedState"/>
     </UserControl.Resources>
 
     <Grid Margin="20">
@@ -60,7 +60,8 @@
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="{x:Type GroupItem}">
-                                        <Expander IsExpanded="{Binding Converter={StaticResource GroupSizeExpander}, Mode=OneWay}"
+                                        <Expander IsExpanded="{Binding Converter={StaticResource GroupExpandedState}, Mode=OneWay}"
+                                                  Expanded="GroupExpander_StateChanged" Collapsed="GroupExpander_StateChanged"
                                                   Background="{DynamicResource SurfaceAltBrush}"
                                                   BorderBrush="{DynamicResource BorderBrush}"
                                                   BorderThickness="1"

@@ -46,6 +46,16 @@ namespace AutoCommand.Views
                 nameof(TrafficStat.WindowTotal), System.ComponentModel.ListSortDirection.Descending));
             view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(TrafficStat.ProcessName)));
             view.Filter = FilterRow;
+
+            // Live shaping instead of a periodic Refresh(): Refresh() regenerates
+            // every group each tick and reset the group Expanders, collapsing
+            // whatever the user had open within seconds. PropertyChanged on these
+            // members now drives the resort/refilter incrementally.
+            view.IsLiveSorting = true;
+            view.LiveSortingProperties.Add(nameof(TrafficStat.WindowTotal));
+            view.IsLiveFiltering = true;
+            view.LiveFilteringProperties.Add(nameof(TrafficStat.WindowTotal));
+            view.LiveFilteringProperties.Add(nameof(TrafficStat.Hostname));
         }
 
         // -----------------------------------------------------------------------
@@ -143,11 +153,12 @@ namespace AutoCommand.Views
                 _rowByKey.Remove(gone);
             }
 
-            // Recompute displays for the selected window, then re-filter/sort
+            // Recompute displays for the selected window; row cells, ordering
+            // and filter membership update via INPC + live shaping — never via
+            // view.Refresh(), which would reset the group Expanders.
             DateTime? windowStart = WindowStart;
             foreach (var stat in _rows)
                 stat.SetWindow(windowStart);
-            CollectionViewSource.GetDefaultView(_rows).Refresh();
 
             bool allTime = windowStart == null;
             int shown = _rows.Count(r => FilterRow(r));
@@ -160,6 +171,29 @@ namespace AutoCommand.Views
                 $"{TcpStreamCaptureService.Shared.LiveFlowCount} live flow(s) · " +
                 $"window: {windowLabel} · " +
                 $"capturing while this tab is open (shared with Python Spawns)";
+        }
+
+        // -----------------------------------------------------------------------
+        // Group expanders
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Records the user's per-group expansion so the grid can restore it
+        /// whenever the group's Expander container is (re)created or its row
+        /// count changes — without this, ItemCount-driven binding re-evaluation
+        /// would snap groups back to their default state.
+        /// </summary>
+        private void GroupExpander_StateChanged(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Expander expander &&
+                expander.DataContext is System.Windows.Data.CollectionViewGroup group &&
+                group.Name is string name)
+            {
+                if (expander.IsExpanded)
+                    Converters.GroupExpandedStateConverter.CollapsedGroups.Remove(name);
+                else
+                    Converters.GroupExpandedStateConverter.CollapsedGroups.Add(name);
+            }
         }
 
         // -----------------------------------------------------------------------

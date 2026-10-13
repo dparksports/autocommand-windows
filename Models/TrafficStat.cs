@@ -146,6 +146,7 @@ namespace AutoCommand.Models
         private bool _windowIsAllTime = true;
         private long _windowTx, _windowRx, _windowFlows;
         private string _patternDisplay, _patternHint;
+        private string _rateDisplay = "—", _lastSeenDisplay;
         private TimeSpan _windowSpan = TimeSpan.Zero;
 
         /// <summary>Recomputes everything the grid shows. windowStartUtc == null → lifetime.</summary>
@@ -166,24 +167,46 @@ namespace AutoCommand.Models
                 if (_windowSpan <= TimeSpan.Zero) _windowSpan = BucketSpan;
             }
 
-            _windowTx = tx;
-            _windowRx = rx;
-            _windowFlows = flows;
+            // Fire only what actually changed: the grid live-sorts and live-
+            // filters on WindowTotal, so every event costs a reshape pass.
+            if (_windowTx != tx)
+            {
+                _windowTx = tx;
+                Fire(nameof(WindowTx)); Fire(nameof(TxDisplay));
+                Fire(nameof(WindowTotal)); Fire(nameof(TotalDisplay));
+            }
+            if (_windowRx != rx)
+            {
+                _windowRx = rx;
+                Fire(nameof(WindowRx)); Fire(nameof(RxDisplay));
+                Fire(nameof(WindowTotal)); Fire(nameof(TotalDisplay));
+            }
+            if (_windowFlows != flows)
+            {
+                _windowFlows = flows;
+                Fire(nameof(WindowFlows)); Fire(nameof(FlowsDisplay));
+            }
+
             ComputePattern();
 
-            OnPropertyChanged(nameof(WindowTx));
-            OnPropertyChanged(nameof(WindowRx));
-            OnPropertyChanged(nameof(WindowTotal));
-            OnPropertyChanged(nameof(WindowFlows));
-            OnPropertyChanged(nameof(TxDisplay));
-            OnPropertyChanged(nameof(RxDisplay));
-            OnPropertyChanged(nameof(TotalDisplay));
-            OnPropertyChanged(nameof(FlowsDisplay));
-            OnPropertyChanged(nameof(RateDisplay));
-            OnPropertyChanged(nameof(PatternDisplay));
-            OnPropertyChanged(nameof(PatternHint));
-            OnPropertyChanged(nameof(LastSeenDisplay));
+            string rate = _windowIsAllTime || _windowSpan <= TimeSpan.Zero
+                ? "—"
+                : FormatBytes((long)(_windowTx / _windowSpan.TotalSeconds)) + "/s ↑";
+            if (_rateDisplay != rate)
+            {
+                _rateDisplay = rate;
+                Fire(nameof(RateDisplay));
+            }
+
+            string lastSeen = LastSeenUtc == default ? "—" : LastSeenUtc.ToLocalTime().ToString("HH:mm:ss");
+            if (_lastSeenDisplay != lastSeen)
+            {
+                _lastSeenDisplay = lastSeen;
+                Fire(nameof(LastSeenDisplay));
+            }
         }
+
+        private void Fire(string name) => OnPropertyChanged(name);
 
         public long WindowTx => _windowTx;
         public long WindowRx => _windowRx;
@@ -197,12 +220,10 @@ namespace AutoCommand.Models
         public string FlowsDisplay => _windowFlows.ToString("N0");
         public string PidsDisplay => JoinCapped(_pids);
         public string PortsDisplay => JoinCapped(_ports);
-        public string LastSeenDisplay => LastSeenUtc == default ? "—" : LastSeenUtc.ToLocalTime().ToString("HH:mm:ss");
+        public string LastSeenDisplay => _lastSeenDisplay ?? "—";
 
         /// <summary>Average outbound rate across the selected window (blank for all-time).</summary>
-        public string RateDisplay => _windowIsAllTime || _windowSpan <= TimeSpan.Zero
-            ? "—"
-            : FormatBytes((long)(_windowTx / _windowSpan.TotalSeconds)) + "/s ↑";
+        public string RateDisplay => _rateDisplay;
 
         /// <summary>Compact 24-hour sparkline of outbound bytes, one glyph per hour.</summary>
         public string PatternDisplay => _patternDisplay;
@@ -256,7 +277,11 @@ namespace AutoCommand.Models
             var sb = new StringBuilder(24);
             foreach (long h in hours)
                 sb.Append(h <= 0 ? '·' : Glyphs[Math.Min(Glyphs.Length - 1, (int)(h * Glyphs.Length / max))]);
-            _patternDisplay = sb.ToString();
+            if (_patternDisplay != sb.ToString())
+            {
+                _patternDisplay = sb.ToString();
+                OnPropertyChanged(nameof(PatternDisplay));
+            }
 
             // Beaconing hint, evaluated on the last 2 hours of buckets: needs
             // ≥6 active buckets whose inter-bucket gaps are all equal (±1) and
@@ -272,7 +297,7 @@ namespace AutoCommand.Models
             }
             active.Sort((a, b) => a.Abs.CompareTo(b.Abs));
 
-            _patternHint = "";
+            string hint = "";
             if (active.Count >= 6)
             {
                 var gaps = new long[active.Count - 1];
@@ -284,7 +309,12 @@ namespace AutoCommand.Models
                 bool similar = mean > 0 && spread / mean <= 1.2;
 
                 if (regular && similar)
-                    _patternHint = $"⚠ beacon-like: every {gaps[0] * 5} min, ~{FormatBytes((long)mean)}";
+                    hint = $"⚠ beacon-like: every {gaps[0] * 5} min, ~{FormatBytes((long)mean)}";
+            }
+            if (_patternHint != hint)
+            {
+                _patternHint = hint;
+                OnPropertyChanged(nameof(PatternHint));
             }
         }
 

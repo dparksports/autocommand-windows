@@ -105,6 +105,47 @@ namespace AutoCommand.Services
             return name;
         }
 
+        // ── File-backed ignore check for other tabs ─────────────────────────
+        //
+        // The ignore list is a user setting ("stop listing this process"), so
+        // the Traffic Patterns tab honors it too, even though its packet-
+        // capture pipeline never goes through a SysmonWatcherService instance.
+        // Cached with a short TTL: consulted per finalized flow and per
+        // snapshot, and instance methods rewrite the file on every change.
+
+        private static readonly object _fileIgnoreLock = new object();
+        private static HashSet<string> _fileIgnored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static DateTime _fileIgnoredLoadedUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// True when the process name is on the shared ignore list file
+        /// (ignored_processes.txt) — the same list the Process Monitor enforces.
+        /// </summary>
+        public static bool IsIgnoredByFile(string processName)
+        {
+            string normalized = NormalizeProcessName(processName);
+            if (normalized.Length == 0) return false;
+            lock (_fileIgnoreLock)
+            {
+                if ((DateTime.UtcNow - _fileIgnoredLoadedUtc).TotalSeconds > 30)
+                {
+                    var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    try
+                    {
+                        foreach (string line in File.ReadAllLines(IgnoredProcessesPath))
+                        {
+                            string n = NormalizeProcessName(line);
+                            if (n.Length > 0) set.Add(n);
+                        }
+                    }
+                    catch { /* missing or unreadable file — empty list */ }
+                    _fileIgnored = set;
+                    _fileIgnoredLoadedUtc = DateTime.UtcNow;
+                }
+                return _fileIgnored.Contains(normalized);
+            }
+        }
+
         private void LoadIgnoredProcesses()
         {
             try
