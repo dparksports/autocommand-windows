@@ -114,6 +114,10 @@ namespace AutoCommand.Views
                 foreach (var item in _uiCollection)
                     item.RefreshLastSeenDisplay();
 
+                // Rows outlive their processes — label the ones whose PID is
+                // gone so a dead connection stops masquerading as a live one.
+                MarkExitedProcesses();
+
                 // Re-enqueue any rows still showing raw IPs (handles items loaded from CSV etc.)
                 foreach (var item in _uiCollection)
                     _dnsService.EnqueueForResolution(item);
@@ -301,6 +305,33 @@ namespace AutoCommand.Views
         private static string FormatThreshold(long bytes) =>
             bytes >= 1048576 ? $"{bytes / 1048576.0:0.#} MB" :
             bytes >= 1024 ? $"{bytes / 1024.0:0.#} KB" : $"{bytes} B";
+
+        /// <summary>
+        /// Labels rows whose process has exited. The PID snapshot is taken on
+        /// a background thread (Process.GetProcesses is not free) and applied
+        /// on the UI thread; the flag is sticky — only a Sysmon
+        /// re-attribution (a new PID on the same remote IP) can clear it.
+        /// </summary>
+        private async void MarkExitedProcesses()
+        {
+            try
+            {
+                var alive = new HashSet<int>();
+                await Task.Run(() =>
+                {
+                    foreach (var p in Process.GetProcesses())
+                        alive.Add(p.Id);
+                });
+
+                foreach (var item in _uiCollection)
+                {
+                    if (item.ProcessId <= 0 || item.HasExited) continue; // System/Idle never exits
+                    if (!alive.Contains(item.ProcessId))
+                        item.MarkExited();
+                }
+            }
+            catch { /* snapshot failed — retried on the next tick */ }
+        }
 
         private void ShowError(string msg)
         {
@@ -965,7 +996,7 @@ namespace AutoCommand.Views
             sb.AppendLine("Currently Tracked Processes and Connections:");
             foreach (var item in items)
             {
-                sb.AppendLine($"- Process: {item.ProcessName} (PID: {item.ProcessId}) | Remote IP: {item.RemoteIp} ({item.Hostname}) | Packets: {item.TxPackets} sent, {item.RxPackets} received | Last Seen: {item.LastSeen:u}");
+                sb.AppendLine($"- Process: {item.ProcessName} (PID: {item.ProcessId}{(item.HasExited ? ", exited" : "")}) | Remote IP: {item.RemoteIp} ({item.Hostname}) | Packets: {item.TxPackets} sent, {item.RxPackets} received | Last Seen: {item.LastSeen:u}");
             }
             return sb.ToString();
         }

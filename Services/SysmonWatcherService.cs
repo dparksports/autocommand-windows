@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Eventing.Reader;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text.RegularExpressions;
@@ -212,6 +213,7 @@ namespace AutoCommand.Services
                 string processId = string.Empty;
                 string destIp = string.Empty;
                 string destHost = string.Empty;
+                string utcTime = string.Empty;
                 string protocol = "TCP"; // Default
 
                 foreach (var data in eventData.Elements(ns + "Data"))
@@ -221,6 +223,7 @@ namespace AutoCommand.Services
                     else if (name == "ProcessId") processId = data.Value;
                     else if (name == "DestinationIp") destIp = data.Value;
                     else if (name == "DestinationHostname") destHost = data.Value;
+                    else if (name == "UtcTime") utcTime = data.Value;
                     else if (name == "Protocol") protocol = data.Value;
                 }
 
@@ -253,7 +256,22 @@ namespace AutoCommand.Services
                 if (string.IsNullOrEmpty(processName) && !string.IsNullOrEmpty(image))
                     processName = Path.GetFileName(image);
 
-                if (_trackedIps.ContainsKey(destIp)) return; // Already tracked
+                if (_trackedIps.TryGetValue(destIp, out var existing))
+                {
+                    // Same process reconnecting — the row already covers it.
+                    if (existing.ProcessId == pid) return;
+
+                    // A different PID on an already-tracked IP: when the row's
+                    // original process has exited, hand the row to the newcomer
+                    // so counters accrue to a live process instead of a ghost
+                    // PID. While the original is still alive the row stays with
+                    // it — the dictionary is keyed by remote IP alone, so one
+                    // row per IP is all the model allows.
+                    if (existing.ProcessId <= 0 || IsProcessAlive(existing.ProcessId)) return;
+
+                    existing.Reattribute(pid, processName, string.IsNullOrEmpty(image) ? null : image);
+                    return;
+                }
 
                 // Seed cache if Sysmon already gave us the hostname
                 if (!string.IsNullOrEmpty(destHost) && destHost != "-")
@@ -273,6 +291,12 @@ namespace AutoCommand.Services
                     RemoteIp    = destIp,
                     Hostname    = initialHost,
                     Protocol    = protocol,
+                    // Seed from the event itself: the packets that triggered
+                    // this event usually crossed the wire before the row
+                    // entered tracking, so a one-shot connection would else
+                    // show "—" forever (and never dim — IsStale skips rows
+                    // with a default LastSeen).
+                    LastSeen = TryParseUtcTime(utcTime) ?? DateTime.UtcNow,
                     RxBytes = 0, TxBytes = 0, RxPackets = 0, TxPackets = 0
                 };
 
@@ -307,6 +331,30 @@ namespace AutoCommand.Services
                 // Process has already exited, or we don't have access (e.g. System/Idle)
                 return string.Empty;
             }
+        }
+
+        /// <summary>True while the PID still exists (PID 0, System/Idle, never exits).</summary>
+        private static bool IsProcessAlive(int pid)
+        {
+            if (pid <= 0) return true;
+            try { Process.GetProcessById(pid); return true; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Parses Sysmon's UtcTime field ("2026-10-13 23:48:53.123"). Null
+        /// when absent or in an unexpected format.
+        /// </summary>
+        private static DateTime? TryParseUtcTime(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+            if (DateTime.TryParseExact(value.Trim(),
+                    new[] { "yyyy-MM-dd HH:mm:ss.fff", "yyyy-MM-dd HH:mm:ss" },
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var parsed))
+                return parsed;
+            return null;
         }
 
         // -----------------------------------------------------------------------

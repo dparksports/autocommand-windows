@@ -58,7 +58,12 @@ namespace AutoCommand.Models
             set { _processName = value; OnPropertyChanged(); OnPropertyChanged(nameof(ProcessDisplay)); }
         }
 
-        /// <summary>Last time a Tx packet was seen for this remote IP.</summary>
+        /// <summary>
+        /// Last time traffic was seen for this remote IP — seeded from the
+        /// Sysmon event time at row creation (the triggering packets usually
+        /// crossed the wire before the row existed), then refreshed by the
+        /// sniffer on every matched packet, sent or received.
+        /// </summary>
         public DateTime LastSeen
         {
             get => _lastSeen;
@@ -74,10 +79,57 @@ namespace AutoCommand.Models
         /// <summary>True when no traffic has been seen for over five minutes (row dims).</summary>
         public bool IsStale => _lastSeen != default && DateTime.UtcNow - _lastSeen > TimeSpan.FromMinutes(5);
 
-        /// <summary>Friendly display: "PID (name)" or just "PID" if name is unknown.</summary>
-        public string ProcessDisplay => string.IsNullOrEmpty(ProcessName)
-            ? ProcessId.ToString()
-            : $"{ProcessId} ({ProcessName})";
+        private bool _hasExited;
+
+        /// <summary>
+        /// True once the row's process has been observed to have exited. The
+        /// row keeps its history (trace/block still work off the Sysmon image
+        /// path) but is labeled so a dead connection stops looking live.
+        /// </summary>
+        public bool HasExited
+        {
+            get => _hasExited;
+            private set { _hasExited = value; OnPropertyChanged(); }
+        }
+
+        /// <summary>Labels the row's process as exited (view's refresh timer, PID snapshot).</summary>
+        public void MarkExited()
+        {
+            if (HasExited) return;
+            HasExited = true;
+            OnPropertyChanged(nameof(ProcessDisplay));
+        }
+
+        /// <summary>
+        /// Hands the row to a new process after its original one exited and a
+        /// different PID connected to the same remote IP, so counters keep
+        /// accruing to a live process instead of a ghost PID.
+        /// </summary>
+        public void Reattribute(int processId, string processName, string imagePath)
+        {
+            ProcessId = processId;
+            ProcessName = processName;
+            if (!string.IsNullOrEmpty(imagePath)) ImagePath = imagePath;
+
+            TaskName = null;   // the old process's task attribution no longer applies
+            TaskUser = null;
+
+            HasExited = false;
+            OnPropertyChanged(nameof(ProcessDisplay));
+            OnPropertyChanged(nameof(ProcessToolTip));
+        }
+
+        /// <summary>Friendly display: "PID (name)", "PID" when the name is unknown, "— exited" once the process is gone.</summary>
+        public string ProcessDisplay
+        {
+            get
+            {
+                var text = string.IsNullOrEmpty(ProcessName)
+                    ? ProcessId.ToString()
+                    : $"{ProcessId} ({ProcessName})";
+                return HasExited ? $"{text} — exited" : text;
+            }
+        }
 
         /// <summary>Human-readable last-seen time.</summary>
         public string LastSeenDisplay
