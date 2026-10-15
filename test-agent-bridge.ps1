@@ -1,13 +1,29 @@
-# End-to-end smoke test for the AI-access bridge (no admin needed).
+# End-to-end smoke test for the AI-access bridge (the app half; the app's
+# manifest is requireAdministrator, so an elevation prompt appears when this
+# is started from a non-elevated shell).
 # 1. starts AutoCommand --agent-headless
-# 2. initialize / tools/list / tools/call over loopback with the session token
-# 3. negative checks: bad token -> 401, spoofed Host -> 403
-# 4. offline --agent-stdio mode answers with setup guidance
+# 2. MCP lifecycle: request before initialize -> -32002; initialize
+#    negotiates the protocol version (never blind-echoes); tools/list /
+#    tools/call over loopback with the session token
+# 3. tools/call success MUST carry boolean isError:false (regression: null
+#    broke strict client schema validation) and failures isError:true
+# 4. negative checks: unknown method -32601, malformed JSON -32700,
+#    bad token -> 401, spoofed Host -> 403
+# 5. offline --agent-stdio mode answers with setup guidance
+# Pure ASCII on purpose: Windows PowerShell 5.1 reads BOM-less scripts as
+# ANSI and non-ASCII corrupts execution (see release.ps1's note).
 param(
     [string]$Exe = "$PSScriptRoot\bin\Debug\net10.0-windows10.0.19041.0\AutoCommand.exe"
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
+
+$script:failures = 0
+function Check([string]$name, [bool]$pass, [string]$detail = '') {
+    $suffix = ''; if ($detail) { $suffix = ' - ' + $detail }
+    if ($pass) { Write-Host "PASS $name$suffix" -ForegroundColor Green }
+    else { Write-Host "FAIL $name$suffix" -ForegroundColor Red; $script:failures++ }
+}
 
 # -- launch headless session -------------------------------------------------
 $proc = Start-Process -FilePath $Exe -ArgumentList '--agent-headless', '120' -PassThru -WindowStyle Hidden
@@ -40,46 +56,76 @@ function Get-ResultText([string]$body) {
     else { $body }
 }
 
-# -- 1. handshake --------------------------------------------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"smoke-test"}}}'
-$init = ($r.Body | ConvertFrom-Json).result
-"handshake: status=$($r.Status) server=$($init.serverInfo.name) version=$($init.serverInfo.version)"
-if ($init.serverInfo.name -ne 'autocommand') { throw 'handshake failed' }
+# -- 1. lifecycle: request before initialize is refused ------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+$pre = $r.Body | ConvertFrom-Json
+Check '1a request before initialize -> -32002' ($pre.error.code -eq -32002) "code $($pre.error.code)"
+$mal = Invoke-Rpc 'not json'
+$malO = $mal.Body | ConvertFrom-Json
+Check '1b malformed JSON -> -32700 with id null' ($malO.error.code -eq -32700 -and $null -eq $malO.id) "status $($mal.Status) code $($malO.error.code)"
 
-# -- 2. tools/list (mutating hidden without the toggle) --------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+# -- 2. handshake: negotiate, never blind-echo ---------------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01","clientInfo":{"name":"smoke-test"}}}'
+$init = ($r.Body | ConvertFrom-Json).result
+"handshake: status=$($r.Status) server=$($init.serverInfo.name) title=$($init.serverInfo.title) version=$($init.serverInfo.version)"
+Check '2a handshake succeeds' ($init.serverInfo.name -eq 'autocommand') ''
+Check '2b unknown version negotiated to newest supported' ($init.protocolVersion -eq '2025-06-18') $init.protocolVersion
+Check '2c serverInfo carries version and title' ($init.serverInfo.version -and $init.serverInfo.title -eq 'AutoCommand (agent bridge)') $init.serverInfo.title
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"smoke-test"}}}'
+$init2 = ($r.Body | ConvertFrom-Json).result
+Check '2d supported version echoed' ($init2.protocolVersion -eq '2025-03-26') $init2.protocolVersion
+
+# -- 3. tools/list (mutating hidden without the toggle) --------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":3,"method":"tools/list"}'
 $tools = ($r.Body | ConvertFrom-Json).result.tools | ForEach-Object { $_.name }
 "tools: $($tools -join ', ')"
 
-# -- 3. tools/call: get_svchost_identity on a real svchost PID --------------------
+# -- 4. tools/call: get_svchost_identity on a real svchost PID -------------------
 $svcPid = (Get-CimInstance Win32_Service -Filter "Name='WpnService'").ProcessId
-$r = Invoke-Rpc ('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_svchost_identity","arguments":{"pid":' + $svcPid + '}}}')
+$r = Invoke-Rpc ('{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_svchost_identity","arguments":{"pid":' + $svcPid + '}}}')
 "identity (PID $svcPid): " + (Get-ResultText $r.Body)
+$ok4 = $r.Body | ConvertFrom-Json
+Check '4a successful tools/call carries isError:false as a real boolean' `
+      ($null -ne $ok4.result.PSObject.Properties['isError'] -and $ok4.result.isError -is [bool] -and $ok4.result.isError -eq $false) `
+      "isError=$(($ok4.result.isError | Out-String).Trim())"
 
-# -- 4. tools/call: get_monitor_rows ----------------------------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_monitor_rows","arguments":{}}}'
+# -- 5. tools/call: get_monitor_rows (same boolean regression) -------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_monitor_rows","arguments":{}}}'
 $snap = ((Get-ResultText $r.Body) | ConvertFrom-Json)
 "monitor: $($snap.row_count) established row(s)"
 $snap.rows | Select-Object -First 4 | ForEach-Object { "  $($_.process) -> $($_.remote) [$($_.classification)]" }
+$ok5 = $r.Body | ConvertFrom-Json
+Check '5a successful tools/call carries isError:false as a real boolean' `
+      ($null -ne $ok5.result.PSObject.Properties['isError'] -and $ok5.result.isError -is [bool] -and $ok5.result.isError -eq $false) ''
 
-# -- 5. tools/call: classify_ip ----------------------------------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"classify_ip","arguments":{"ip":"20.59.87.225"}}}'
+# -- 6. tools/call: classify_ip ----------------------------------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"classify_ip","arguments":{"ip":"20.59.87.225"}}}'
 "classify: " + ((Get-ResultText $r.Body) -replace '\s+', ' ')
 
-# -- 6. negative: bad token -> 401 --------------------------------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":6,"method":"ping"}', 'Bearer deadbeef'
+# -- 7. unknown tool -> isError:true result (not a transport error) ---------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}'
+$unkTool = $r.Body | ConvertFrom-Json
+Check '7a unknown tool -> result with isError:true' ($unkTool.result.isError -eq $true) ''
+
+# -- 8. unknown method -> -32601 ---------------------------------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":8,"method":"resources/list"}'
+$unkMethod = $r.Body | ConvertFrom-Json
+Check '8a unknown method -> -32601' ($unkMethod.error.code -eq -32601) "code $($unkMethod.error.code)"
+
+# -- 9. negative: bad token -> 401 --------------------------------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":9,"method":"ping"}', 'Bearer deadbeef'
 "bad token: status=$($r.Status) (expect 401)"
 
-# -- 7. negative: spoofed Host -> 403 -----------------------------------------------
-$r = Invoke-Rpc '{"jsonrpc":"2.0","id":7,"method":"ping"}', "Bearer $token", 'evil.example.com:443'
+# -- 10. negative: spoofed Host -> 403 -----------------------------------------------
+$r = Invoke-Rpc '{"jsonrpc":"2.0","id":10,"method":"ping"}', "Bearer $token", 'evil.example.com:443'
 "spoofed host: status=$($r.Status) (expect 403)"
 
-# -- 8. stop: session file must disappear --------------------------------------------
+# -- 11. stop: session file must disappear --------------------------------------------
 Stop-Process -Id $proc.Id -Force
 Start-Sleep -Milliseconds 800
 "session file after stop: exists=$(Test-Path $sessionPath) (expect False)"
 
-# -- 9. offline stdio bridge ----------------------------------------------------------
+# -- 12. offline stdio bridge ----------------------------------------------------------
 $offlineInput = @'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"smoke-test"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
@@ -93,4 +139,6 @@ $out | ForEach-Object {
     elseif ($o.result.serverInfo) { "stdio offline handshake: " + $o.result.serverInfo.name }
     else { "stdio: $_" }
 }
-"SMOKE TEST DONE"
+
+if ($script:failures -gt 0) { Write-Host "BRIDGE SMOKE TEST FAILED ($($script:failures) check(s))" -ForegroundColor Red; exit 1 }
+Write-Host 'BRIDGE SMOKE TEST PASSED' -ForegroundColor Green

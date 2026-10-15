@@ -56,6 +56,7 @@ namespace AutoCommand.Services
         private string _token = "";
         private int _port;
         private bool _allowMutating;
+        private bool _clientInitialized;
         private readonly object _sessionToolsLock = new();
         private readonly HashSet<string> _sessionAllowedTools = new(System.StringComparer.Ordinal);
         public string ClientName { get; private set; } = "";
@@ -78,6 +79,7 @@ namespace AutoCommand.Services
             _allowMutating = allowMutating;
             lock (_sessionToolsLock) _sessionAllowedTools.Clear();
             ClientName = "";
+            _clientInitialized = false; // a new session is a new MCP lifecycle
             ConnectedCalls = 0;
 
             TcpListener listener = null;
@@ -250,11 +252,28 @@ namespace AutoCommand.Services
 
         // ── MCP dispatch ──────────────────────────────────────────────────
 
+        // Protocol versions this bridge actually implements — must match the
+        // proxy's set (see AgentProxy\Program.cs): initialize/notifications/*,
+        // ping, tools/list, tools/call; resources/* and prompts/* answer -32601.
+        private static readonly string[] SupportedProtocols = { "2024-11-05", "2025-03-26", "2025-06-18" };
+
+        private static string NegotiateProtocol(string requested) =>
+            !string.IsNullOrEmpty(requested) && Array.IndexOf(SupportedProtocols, requested) >= 0
+                ? requested
+                : SupportedProtocols[^1];
+
         internal async Task<string> DispatchAsync(JsonObject rpc, string userAgent)
         {
             string method = rpc["method"]?.GetValue<string>() ?? "";
             JsonObject @params = rpc["params"] as JsonObject;
             bool isNotification = rpc["id"] == null;
+
+            // MCP lifecycle: requests before initialize are refused (-32002).
+            // ping stays answerable (clients probe with it), notifications
+            // are dropped — there is nobody to answer. Mirrored in the proxy
+            // so both halves enforce the same rule.
+            if (!isNotification && !_clientInitialized && method != "initialize" && method != "ping")
+                return RpcError(rpc["id"], -32002, "Server not initialized — send initialize first.");
 
             try
             {
@@ -266,18 +285,24 @@ namespace AutoCommand.Services
                         string clientName = clientInfo?["name"]?.GetValue<string>();
                         ClientName = !string.IsNullOrEmpty(clientName) ? clientName
                             : !string.IsNullOrEmpty(userAgent) ? userAgent : "unknown";
+                        _clientInitialized = true;
                         LogActivity("client", "connected", ClientName);
                         Activity?.Invoke($"client connected: {ClientName}");
+                        string negotiated = NegotiateProtocol(requested);
+                        if (negotiated != requested)
+                            LogActivity("client", "protocol", $"requested {requested ?? "(none)"} — answered {negotiated}");
                         return RpcResult(rpc["id"], new JsonObject
                         {
-                            // echo the client's version — our surface is fixed, so we
-                            // speak whichever protocol the client asked for
-                            ["protocolVersion"] = requested ?? "2025-03-26",
+                            // negotiate, never blind-echo: echoing an arbitrary
+                            // version string claimed protocols we do not speak
+                            ["protocolVersion"] = negotiated,
                             ["capabilities"] = new JsonObject { ["tools"] = new JsonObject { ["listChanged"] = false } },
                             ["serverInfo"] = new JsonObject
                             {
                                 ["name"] = "autocommand",
-                                ["title"] = "AutoCommand (elevated analyst toolkit)",
+                                // same title offline and online so the client UI
+                                // never relabels the server when a session flips
+                                ["title"] = "AutoCommand (agent bridge)",
                                 ["version"] = FileVersionInfo.GetVersionInfo(Environment.ProcessPath ?? "AutoCommand.exe").ProductVersion ?? "?",
                             },
                             ["instructions"] = "Read-only security telemetry from the locally running AutoCommand app " +
