@@ -10,7 +10,7 @@ app sends the following, at most once per day:
 | Field | Value | Why |
 |---|---|---|
 | `a` | `"autocommand"` | Which app |
-| `v` | App version (e.g. `261015`) | Know which versions people actually run |
+| `v` | Build date, compact (e.g. `261015`) | Day-level track of which builds people run |
 | `o` | Windows build (e.g. `10.0.26300`) | Know which builds to support |
 
 **There is no identifier in the count — not even a random one.** No

@@ -21,7 +21,7 @@ namespace AutoCommand.Services
     ///
     /// Payload — the whole thing, nothing else, ever:
     ///   { "a": "autocommand",
-    ///     "v": app version,  "o": Windows build }
+    ///     "v": build date, compact (e.g. 261015),  "o": Windows build }
     /// NO identifier of any kind is included — not even a random install id.
     /// The app sends at most once per UTC day (LastSentDay below), so each
     /// consenting install adds 1 to a daily aggregate counter on the server.
@@ -120,9 +120,7 @@ namespace AutoCommand.Services
                 var payload = JsonSerializer.Serialize(new
                 {
                     a = AppName,
-                    v = Assembly.GetEntryAssembly()?
-                            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-                            .InformationalVersion ?? "unknown",
+                    v = CompactBuildDate(),
                     o = Environment.OSVersion.Version.ToString()
                 });
 
@@ -134,6 +132,21 @@ namespace AutoCommand.Services
                 // On failure: no state change — retried on a later launch, never spammed.
             }
             catch { /* offline / DNS blocked / endpoint down — silently fine */ }
+        }
+
+        /// <summary>The count tracks builds by day, so the ping sends the
+        /// version's date in compact form (2026.10.15[.2] → 261015) rather than
+        /// the full app version — same-day revisions fold to the same day, by
+        /// design. Anything unparseable passes through unchanged.</summary>
+        private static string CompactBuildDate()
+        {
+            string v = Assembly.GetEntryAssembly()?
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion ?? "unknown";
+            var m = System.Text.RegularExpressions.Regex.Match(v, @"^(\d{4})\.(\d{2})\.(\d{2})");
+            return m.Success
+                ? m.Groups[1].Value.Substring(2) + m.Groups[2].Value + m.Groups[3].Value
+                : v;
         }
 
         // ── HKCU persistence (same store and style as ThemeService) ──

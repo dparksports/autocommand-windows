@@ -16,7 +16,7 @@ to a person, even by us, even after a full database leak.
 ```json
 POST /v1/ping
 { "a": "autocommand",          // app: autocommand | shields-up
-  "v": "2026.10.14.1",         // app version
+  "v": "261015",               // build date, compact — derived from the app version's date (app versions stay 2026.10.NN)
   "o": "10.0.26300" }          // Windows OS build
 ```
 

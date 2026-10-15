@@ -9,9 +9,9 @@
 # debug (an em-dash once swallowed an exit statement).
 #
 # Usage:
-#   powershell -File release.ps1 -Version 261016       # full release (pushes!)
-#   powershell -File release.ps1 -Version 261015.2     # same-day follow-up (2nd segment)
-#   powershell -File release.ps1 -Version 261016 -Yes  # no confirm prompt
+#   powershell -File release.ps1 -Version 2026.10.16   # full release (pushes!)
+#   powershell -File release.ps1 -Version 2026.10.14.2 # same-day follow-up (4th segment)
+#   powershell -File release.ps1 -Version 2026.10.16 -Yes   # no confirm prompt
 #   powershell -File release.ps1 -DryRun               # package + verify only
 #
 # Full release requires: clean working tree on master, release_notes_v<Version>.md

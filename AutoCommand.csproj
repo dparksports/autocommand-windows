@@ -6,7 +6,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <Version>261015</Version>
+    <Version>2026.10.14.1</Version>
     <AssemblyName>AutoCommand</AssemblyName>
     <Product>AutoCommand</Product>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -102,23 +102,13 @@
        follows. -->
   <Target Name="GenerateVersionAssemblyInfo" BeforeTargets="BeforeCompile">
     <Error Condition="'$(Version)' == ''"
-           Text="GenerateVersionAssemblyInfo: &lt;Version&gt; is empty — it is the single source of truth and must be set (e.g. 261015)." />
+           Text="GenerateVersionAssemblyInfo: &lt;Version&gt; is empty — it is the single source of truth and must be set (e.g. 2026.10.15)." />
     <PropertyGroup>
-      <!-- Assembly/FileVersion parts must be dotted with each part &lt; 65536
-           (CLR metadata limit), so the compact date folds out: 261015 →
-           26.10.15.0, 261015.2 → 26.10.15.2; dotted forms pass through
-           (3-part gets .0, a 4th segment unchanged). InformationalVersion
-           keeps the literal string — it is what the exe reports, what the
-           usage ping sends, and what release.ps1 verifies. -->
-      <Version4>$([System.Text.RegularExpressions.Regex]::Replace(
-          $([System.Text.RegularExpressions.Regex]::Replace(
-              $([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '^(\d{2})(\d{2})(\d{2})\.(\d+)$', '$1.$2.$3.$4')),
-              '^(\d{2})(\d{2})(\d{2})$', '$1.$2.$3.0')),
-          '^\d+\.\d+\.\d+$', '$0.0'))</Version4>
+      <!-- exactly four segments: 3-part versions get .0, a same-day fourth
+           segment (2026.10.14.1) passes through unchanged -->
+      <Version4>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '^\d+\.\d+\.\d+$', '$0.0'))</Version4>
       <GeneratedVersionFile>$(IntermediateOutputPath)GeneratedVersionInfo.cs</GeneratedVersionFile>
     </PropertyGroup>
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(Version4)', '^\d+\.\d+\.\d+\.\d+$'))"
-           Text="GenerateVersionAssemblyInfo: cannot derive a 4-part assembly version from '$(Version)' — use 261015, 261015.2, or a dotted form (26.10.15 / 2026.10.14.1)." />
     <MakeDir Directories="$(IntermediateOutputPath)" Condition="!Exists('$(IntermediateOutputPath)')" />
     <ItemGroup>
       <GeneratedVersionLines Include="// Auto-generated from &lt;Version&gt; in AutoCommand.csproj — do not edit." />

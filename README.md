@@ -92,7 +92,7 @@ Blocking is easy; *un*-blocking is where other tools strand you. AutoCommand:
 
 - **Nothing runs without you.** Blocks, kills, and instrumentation installs all confirm first.
 - **Observational by default.** The spawn/connection tabs only watch; the invasive capabilities (call stacks, TLS plaintext) exist solely for python environments you explicitly instrument.
-- **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); the app sends **nothing by default**. The sole optional exception is an **opt-in, anonymous usage count** — app version and Windows build, at most once a day, **no identifier of any kind (not even a random one)**, IP never stored — offered at most three times, off unless you say yes, and revocable anytime ([privacy policy](PRIVACY.md); spec + server code are public in the repo's `telemetry/` folder — verify, don't trust).
+- **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); the app sends **nothing by default**. The sole optional exception is an **opt-in, anonymous usage count** — compact build date (e.g. `261015`) and Windows build, at most once a day, **no identifier of any kind (not even a random one)**, IP never stored — offered at most three times, off unless you say yes, and revocable anytime ([privacy policy](PRIVACY.md); spec + server code are public in the repo's `telemetry/` folder — verify, don't trust).
 
 ## Build from source
 
