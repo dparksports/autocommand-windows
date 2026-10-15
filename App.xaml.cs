@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Windows;
 
 namespace AutoCommand
@@ -7,6 +8,19 @@ namespace AutoCommand
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            // ── headless OneSettings watchdog path (no UI) ──────────────
+            // The \AutoCommand\OneSettingsCadenceWatchdog SYSTEM task (installed
+            // from the OneSettings tab with the watchdog box checked) launches
+            // AutoCommand.exe with this argument daily 03:30 and at logon to
+            // re-apply the saved RefreshCache cadence if Windows servicing
+            // reverted it. Silent; every action lands in the machine-readable
+            // audit trail under %ProgramData%\AutoCommand\onesettings-cadence.
+            if (e.Args != null && e.Args.Any(a => string.Equals(a, "onesettings-enforce", System.StringComparison.OrdinalIgnoreCase)))
+            {
+                RunOneSettingsEnforce();
+                return;
+            }
 
             // Apply the saved theme before any window loads (brushes are
             // DynamicResource, so this also re-themes live when changed later)
@@ -55,6 +69,20 @@ namespace AutoCommand
         // GUID under HKCU\Software\AutoCommand. Usage telemetry was removed;
         // delete the leftovers so no orphaned tracking id survives.
         // Idempotent — no-op once clean.
+        private void RunOneSettingsEnforce()
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                // Engine handles the no-saved-state case as a no-op (normal
+                // after a restore), and audits both success and failure - a
+                // failed watchdog run must never block app shutdown.
+                new OneSettingsCadence.CadenceEngine().Enforce();
+            }
+            catch { /* audited inside the engine where possible; always exit */ }
+            Shutdown();
+        }
+
         private void RemoveLegacyAnalyticsRegistryValues()
         {
             try
