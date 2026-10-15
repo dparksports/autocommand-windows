@@ -408,10 +408,26 @@ namespace AutoCommand.Views
                 _sysmonService.Start();
                 _snifferService.Start();
                 _saveTimer.Start();
-                
+
                 ToggleMonitorBtn.Content = "Stop Monitor";
                 MonitorStatusText.Text = "Monitor active: Sysmon event listening and Raw Socket sniffing enabled.";
                 _isMonitoring = true;
+
+                // Baseline: connections opened before Start never fire a
+                // Sysmon ID 3 (svchost's boot-time WNS channel and other
+                // long-lived sockets) — seed rows for everything established
+                // right now, then let live events take over. Off the UI
+                // thread: it does a PID/path lookup per connection.
+                _ = Task.Run(() =>
+                {
+                    int seeded = _sysmonService.SeedBaseline();
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_isMonitoring)
+                            MonitorStatusText.Text =
+                                $"Monitor active: Sysmon events + raw socket sniffing · {seeded} existing connection(s) seeded";
+                    });
+                });
             }
             else
             {
@@ -423,22 +439,6 @@ namespace AutoCommand.Views
                 MonitorStatusText.Text = "Monitor is stopped.";
                 _isMonitoring = false;
             }
-        }
-
-        private void AddProcessBtn_Click(object sender, RoutedEventArgs e)
-        {
-            string procName = NewProcessBox.Text.Trim();
-            if (string.IsNullOrEmpty(procName)) return;
-
-            // Ensure it ends with .exe for the internal filter
-            if (!procName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            {
-                procName += ".exe";
-            }
-
-            _sysmonService.AddTargetProcess(procName);
-            NewProcessBox.Clear();
-            MessageBox.Show($"Added {procName} to tracking list.", "Process Added", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         // -----------------------------------------------------------------------
@@ -581,56 +581,6 @@ namespace AutoCommand.Views
         {
             if (SvchostGrid.SelectedItem is SvchostMonitorItem item)
                 OpenPidTrace(item.ProcessId, item);
-        }
-
-        /// <summary>
-        /// Refreshes the inquiry dropdown with every PID currently shown in
-        /// the grid (most recently active first). Rebuilding ItemsSource
-        /// clears the editable text, so whatever the user typed is restored.
-        /// </summary>
-        private void PidCombo_DropDownOpened(object sender, EventArgs e)
-        {
-            string typed = PidCombo.Text;
-            PidCombo.ItemsSource = _uiCollection
-                .GroupBy(i => i.ProcessId)
-                .Select(g => g.OrderByDescending(i => i.LastSeen).First())
-                .OrderByDescending(i => i.LastSeen)
-                .Select(i => i.ProcessId == 0
-                    ? "0 · System"
-                    // svchost entries list their hosted service — the
-                    // identity — instead of the shared image name
-                    : $"{i.ProcessId} · {i.IdentityLabel}")
-                .ToList();
-            PidCombo.Text = typed;
-        }
-
-        private void PidCombo_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Enter) TracePidBtn_Click(sender, e);
-        }
-
-        private void TracePidBtn_Click(object sender, RoutedEventArgs e)
-        {
-            // Accepts both a bare PID and a picked "1234 · name" entry; with
-            // nothing typed or picked, falls back to the selected row so the
-            // button does the obvious thing instead of demanding input.
-            string text = (PidCombo.Text ?? string.Empty).Trim();
-            int len = 0;
-            while (len < text.Length && char.IsDigit(text[len])) len++;
-            if (len > 0 && int.TryParse(text.AsSpan(0, len), out int pid) && pid >= 0)
-            {
-                OpenPidTrace(pid, _uiCollection.FirstOrDefault(i => i.ProcessId == pid));
-                return;
-            }
-
-            if (SvchostGrid.SelectedItem is SvchostMonitorItem row && row.ProcessId > 0)
-            {
-                OpenPidTrace(row.ProcessId, row);
-                return;
-            }
-
-            MessageBox.Show("Enter or pick a PID first — e.g. 20264 (the '1234 · name' dropdown entries work too) — or select a row and press Trace.",
-                "PID Inquiry", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         /// <summary>

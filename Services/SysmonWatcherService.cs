@@ -196,6 +196,102 @@ namespace AutoCommand.Services
             }
         }
 
+        /// <summary>
+        /// Seeds the tracked-IP table with the machine's currently
+        /// established TCP connections. The event path only sees connections
+        /// opened from now on — long-lived channels (svchost's boot-time WNS
+        /// link, persistent update/telemetry sockets) never fire a new
+        /// Event ID 3, so without this snapshot they stay invisible until
+        /// they happen to reconnect. Same filters as the event path (ignore
+        /// list, ignored IPs, cloud filter, one row per IP); rows surface
+        /// through OnNewConnectionTracked exactly like event-driven ones,
+        /// so callers on any thread get UI marshaling for free. Returns the
+        /// number of rows seeded. IPv4 only — netstat's IPv6 rows don't
+        /// match the parser, and the live event path covers v6 anyway.
+        /// </summary>
+        public int SeedBaseline()
+        {
+            string[] lines;
+            try
+            {
+                var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
+                {
+                    CreateNoWindow = true, UseShellExecute = false,
+                    RedirectStandardOutput = true
+                };
+                using var p = Process.Start(psi);
+                string output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(5000);
+                lines = output.Split('\n');
+            }
+            catch { return 0; } // enumeration unavailable — the event path still works
+
+            int seeded = 0;
+            foreach (var line in lines)
+            {
+                var m = NetstatEstablishedRe.Match(line);
+                if (!m.Success) continue;
+                try
+                {
+                    string destIp = m.Groups["ip"].Value;
+                    if (string.IsNullOrEmpty(destIp) || IsIgnoredIp(destIp)) continue;
+                    if (FilterKnownCloudIps && IsKnownCloudIp(destIp)) continue;
+
+                    int pid = int.Parse(m.Groups["pid"].Value);
+                    string image = TryGetProcessPath(pid);
+                    string processName = ResolveProcessName(pid);
+                    if (string.IsNullOrEmpty(processName) && !string.IsNullOrEmpty(image))
+                        processName = Path.GetFileName(image);
+                    if (string.IsNullOrEmpty(processName)) continue; // unattributable
+
+                    // Same gates as Watcher_EventRecordWritten, same order
+                    if (IsProcessIgnored(image) || IsProcessIgnored(processName)) continue;
+                    bool isTarget = MonitorAllProcesses;
+                    if (!isTarget)
+                    {
+                        string matchName = image ?? NormalizeProcessName(processName);
+                        foreach (var target in _targetProcesses)
+                            if (matchName.EndsWith(target, StringComparison.OrdinalIgnoreCase)) { isTarget = true; break; }
+                    }
+                    if (!isTarget) continue;
+                    if (_trackedIps.ContainsKey(destIp)) continue; // a row already covers this IP
+
+                    string initialHost = _dnsService.GetCachedHostname(destIp) ?? destIp;
+                    if (FilterKnownCloudIps && KnownDomainsRegex.IsMatch(initialHost)) continue;
+
+                    var item = new SvchostMonitorItem
+                    {
+                        ProcessId = pid,
+                        ProcessName = processName,
+                        ImagePath = image,
+                        RemoteIp = destIp,
+                        Hostname = initialHost,
+                        Protocol = "tcp",
+                        ProcessStartedUtc = TryGetProcessStartUtc(pid),
+                        // Alive right now by definition — a real LastSeen
+                        // keeps the row out of the stale-dimming skip list
+                        LastSeen = DateTime.UtcNow,
+                        RxBytes = 0, TxBytes = 0, RxPackets = 0, TxPackets = 0
+                    };
+
+                    if (_trackedIps.TryAdd(destIp, item))
+                    {
+                        OnNewConnectionTracked?.Invoke(item);
+                        _dnsService.EnqueueForResolution(item);
+                        seeded++;
+                    }
+                }
+                catch { /* one bad row must not abort the snapshot */ }
+            }
+            return seeded;
+        }
+
+        // netstat -ano -p TCP: "TCP  local  remote  ESTABLISHED  pid" —
+        // IPv6 remotes ([addr]:port) deliberately don't match
+        private static readonly Regex NetstatEstablishedRe = new(
+            @"^\s*TCP\s+\S+\s+(?<ip>[^:]+):(?<port>\d+)\s+ESTABLISHED\s+(?<pid>\d+)\s*$",
+            RegexOptions.Compiled);
+
         private void Watcher_EventRecordWritten(object sender, EventRecordWrittenEventArgs e)
         {
             try
@@ -336,6 +432,18 @@ namespace AutoCommand.Services
                 // Process has already exited, or we don't have access (e.g. System/Idle)
                 return string.Empty;
             }
+        }
+
+        /// <summary>
+        /// The PID's executable path, or null when unreadable (exited, System,
+        /// or access denied). Baseline rows carry it so their identity
+        /// survives process exit exactly like Sysmon-sourced rows.
+        /// </summary>
+        private static string TryGetProcessPath(int pid)
+        {
+            if (pid <= 0) return null;
+            try { return Process.GetProcessById(pid).MainModule?.FileName; }
+            catch { return null; }
         }
 
         /// <summary>
