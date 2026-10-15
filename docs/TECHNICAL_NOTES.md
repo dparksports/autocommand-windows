@@ -45,6 +45,44 @@ How AutoCommand delivers what the [README](../README.md) promises: the technolog
 | Thaw | `icacls /restore` of the snapshot; deny-ACE absence verified before state cleanup |
 | State | `update_freeze.json` next to the exe; ACL backups under `freeze_backups\` |
 
+### OneSettings cadence (🔄 tab + `OneSettingsCadence` CLI)
+
+The 🔄 **OneSettings tab** and the standalone `OneSettingsCadence` CLI are two
+faces over one engine (`OneSettingsCadence/OneSettingsCadence.Core`, linked
+in-process by the app the same way `SvchostAnalyzer.Core` is — the CLI keeps
+its own `Main()` and builds separately). It slows the Windows inbox task
+`\Microsoft\Windows\Flighting\OneSettings\RefreshCache` — the OneSettings
+remote-config fetch that runs ~20-40×/day as SYSTEM off a ~3h20m repetition
+(+1h random delay, +WNF state-change triggers) — to a user-chosen interval, and
+restores stock behavior afterwards. Task Scheduler is reached over the
+`Schedule.Service` COM interface (same dynamic-COM pattern as
+`Services/TaskSchedulerService.cs`), never through `schtasks.exe`. The app
+manifest already demands administrator, so the tab applies changes with no UAC
+round-trip; the CLI self-elevates.
+
+| Concern | Technology |
+|---|---|
+| `status` / `preview` / `runs` | Read-only, no elevation (the task's security descriptor grants Authenticated Users read). `preview` runs the exact transform `set` would apply and prints the resulting task XML; `runs` (also the tab's third card) reads the Task Scheduler operational channel and compares observed launches against the expected cadence — each launch bucketed by why the scheduler says it fired (timer / event / logon / manual-API). WNF state-change triggers fire through the same EID-107 channel as the timer, so the verdict is WNF-aware: excess 107s with WNF triggers installed are theirs, not a reverted cadence |
+| `set` | Self-elevates via UAC (the elevated child tees its output back to the caller's console through a temp file); writes a timestamped backup of the live XML under `C:\ProgramData\AutoCommand\onesettings-cadence\backups\` (UTF-16, round-trip-verified), re-registers, then re-reads the live task and compares interval / random delay / WNF trigger count — any mismatch rolls back from the backup (a failed rollback exits 4 and says so loudly) |
+| The transform | Touches `Triggers` only: repetition interval set, `RandomDelay` forced to `PT0S`, `WnfStateChangeTrigger` elements removed unless `--keep-wnf`. A repetition `Duration` shorter than the new interval is dropped (absent = indefinite) so the pattern cannot re-arm on the boundary. Principal (S-1-5-18), actions, settings and `SecurityDescriptor` are preserved from the live XML |
+| Watchdog | Optional (`set --watchdog`, or the tab's checkbox): a SYSTEM task `\AutoCommand\OneSettingsCadenceWatchdog` (daily 03:30 + logon) re-applies the saved cadence only when the live task drifted — Windows servicing rewrites inbox task definitions (this machine's `StartBoundary` was rewritten by the OS the day the tool was written). From the CLI the watchdog runs the exe with `enforce --quiet`; from the tab it launches AutoCommand.exe with the `onesettings-enforce` argument, handled headlessly in `App.OnStartup` before any window loads. `restore` removes the watchdog so it cannot fight the restored stock definition |
+| `restore` | Re-registers the newest backup (or `--backup <file>`), with the same snapshot → register → verify → roll-back discipline; clears the saved cadence and removes the watchdog on success |
+| Interval input | Plain hours (`24`, `24h`, `0.5`), clock (`06:00:00`, `6:00`), or ISO 8601 (`PT24H`, `P1DT12H`); default 24h; warns below 6h or above 72h (cached OneSettings payloads declare ~72h freshness windows) but proceeds |
+| Audit | Every change (what, when, old→new interval/delay/WNF count, backup filename, user, result) is one JSONL line in `onesettings-cadence\audit.jsonl` |
+| Exit codes | `0` ok · `1` usage/task-not-found/IO · `2` drift found (`status`) or verified failure rolled back · `3` elevation declined · `4` rollback failed too |
+
+Pure logic (parser, transform, drift detection, run-history field parsing and
+compliance bucketing — including the exact-match event namespace a typo once
+silently broke) has an offline self-test: `OneSettingsCadenceSelfTest`
+(43 checks, no COM, no writes, no elevation).
+
+What the tab cannot enforce, honestly stated in the card itself: the watchdog
+re-asserts the task *definition*; launches started by other actors (`Run()` on
+the task) are counted and named but not preventable, and a component that
+bypasses the task entirely (fetching OneSettings in-process from a service) is
+invisible to scheduler history — it would surface as svchost traffic in the
+Process Monitor, where it can be blocked like any other destination.
+
 ### Telemetry Opt-Out
 | Concern | Technology |
 |---|---|
@@ -105,6 +143,9 @@ How AutoCommand delivers what the [README](../README.md) promises: the technolog
 | `C:\ProgramData\AutoCommand\bloatware_config.json` | Your bloatware-list customizations (delta over defaults) |
 | `C:\ProgramData\AutoCommand\firewall_config.json` | Per-rule firewall overrides |
 | `C:\ProgramData\AutoCommand\firewall_baseline.json` | Firewall drift baseline |
+| `C:\ProgramData\AutoCommand\onesettings-cadence\state.json` | OneSettingsCadence CLI — saved desired cadence for the inbox RefreshCache task |
+| `C:\ProgramData\AutoCommand\onesettings-cadence\backups\RefreshCache-*.xml` | OneSettingsCadence CLI — timestamped task-XML backups (`restore` re-registers these) |
+| `C:\ProgramData\AutoCommand\onesettings-cadence\audit.jsonl` | OneSettingsCadence CLI — audit trail: every change with old→new values and the backup filename |
 | `<app>\blocked.txt` | Firewall blocks created from the monitors |
 | `<app>\ignored_processes.txt` | Process Monitor ignore list |
 | `<app>\ultimate_autopilot_stats.csv` | Hourly connection-stats export |
