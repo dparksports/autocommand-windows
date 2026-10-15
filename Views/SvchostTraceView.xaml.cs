@@ -1,3 +1,4 @@
+using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -41,6 +42,9 @@ namespace AutoCommand.Views
         private readonly DispatcherTimer _analysis = new() { Interval = TimeSpan.FromSeconds(30) };
         private readonly DispatcherTimer _svcTimer = new() { Interval = TimeSpan.FromSeconds(10) };
         private bool _suppressAutoStartEvents;
+        // one-time init guard — Loaded fires on every tab switch, but the
+        // Tick subscription and the trace auto-start must happen only once
+        private bool _isInitialized;
 
         // pid -> services hosted
         private readonly Dictionary<int, string> _svcByPid = new();
@@ -71,21 +75,33 @@ namespace AutoCommand.Views
         {
             InitializeComponent();
             TraceGrid.ItemsSource = _rows;
-            _poll.Tick += (_, _) => Poll();
+            _poll.Tick += (_, _) => PollSafe();
             _analysis.Tick += (_, _) => Analyze();
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
-            _svcTimer.Tick += (_, _) => _ = RefreshServiceStatusAsync();
+            if (!_isInitialized)
+            {
+                _isInitialized = true;
+                _svcTimer.Tick += (_, _) => _ = RefreshServiceStatusAsync();
+                // Auto-start on first load, matching the Process Monitor
+                // tab's contract: instances appear the moment the tab is
+                // first shown, instead of waiting for an explicit Start.
+                StartTraceBtn_Click(StartTraceBtn, null);
+            }
             _svcTimer.Start();
             _ = RefreshServiceStatusAsync();
         }
 
         private void UserControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            // Only the status strip is tab-scoped. The trace poll keeps
+            // running across tab switches — a recorder must not stop
+            // because another tab was viewed (same lifetime policy as the
+            // static CaptureEngine below). Rows collected while hidden are
+            // all there when the tab returns.
             _svcTimer.Stop();
-            Stop();
         }
 
         // ── capture control ────────────────────────────────────────────────
@@ -95,9 +111,17 @@ namespace AutoCommand.Views
             if (_tracing) { Stop(); return; }
             _tracing = true;
             StartTraceBtn.Content = "⏹ Stop Trace";
-            Baseline();
+            try { Baseline(); }
+            catch (Exception ex)
+            {
+                // Auto-start runs this on first tab load — a WMI failure
+                // must not surface as a modal via the app-level Dispatcher
+                // handler. The poll keeps retrying and reports here.
+                TraceStatusText.Text = $"Baseline failed: {ex.Message} — polls continue, errors shown here";
+            }
             _poll.Start();
             _analysis.Start();
+            UpdateEmptyHint();
         }
 
         private void Stop()
@@ -108,6 +132,7 @@ namespace AutoCommand.Views
             if (StartTraceBtn != null) StartTraceBtn.Content = "▶ Start Trace";
             if (TraceStatusText != null)
                 TraceStatusText.Text = $"Trace stopped. {_rows.Count} events captured — Analyze or Export.";
+            UpdateEmptyHint();
         }
 
         private void ClearBtn_Click(object sender, RoutedEventArgs e)
@@ -117,6 +142,7 @@ namespace AutoCommand.Views
             _identByPid.Clear(); _identityFlags.Clear();
             _ticks = 0; _flags = 0;
             EventsChip.Text = "events: 0"; FlagsChip.Text = "flags: 0";
+            UpdateEmptyHint();
         }
 
         // ── poll: spawns, exits, connections, byte samples ─────────────────
@@ -249,6 +275,29 @@ namespace AutoCommand.Views
 
             EventsChip.Text = $"events: {_rows.Count}";
             TraceStatusText.Text = $"Tracing… tick {_ticks} · {_svcByPid.Count} svchost instances · {_connOpen.Count} live connections";
+        }
+
+        /// <summary>
+        /// Poll wrapper: WMI/netstat failures surface in the status line
+        /// instead of raising a modal per tick through the app-level
+        /// Dispatcher handler. Transient WMI errors recover on retry.
+        /// </summary>
+        private void PollSafe()
+        {
+            try { Poll(); }
+            catch (Exception ex)
+            {
+                TraceStatusText.Text = $"Trace error (tick {_ticks}): {ex.Message} — retrying next tick";
+            }
+        }
+
+        /// <summary>The grid overlay shown while stopped with no rows, so a
+        /// passive tab reads as "not tracing" rather than broken detection.</summary>
+        private void UpdateEmptyHint()
+        {
+            if (EmptyHint != null)
+                EmptyHint.Visibility = (!_tracing && _rows.Count == 0)
+                    ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void OnSpawn((int Pid, int Ppid, string Created, string Cmd, long R, long W) p, string type, DateTime now)

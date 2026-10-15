@@ -80,34 +80,44 @@
         </Border>
 
         <!-- Event timeline -->
-        <DataGrid Grid.Row="3" x:Name="TraceGrid" SelectionMode="Single" IsReadOnly="True"
-                  FontFamily="Consolas" FontSize="11">
-            <DataGrid.RowStyle>
-                <Style TargetType="DataGridRow">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding Type}" Value="FLAG">
-                            <Setter Property="Foreground" Value="#F2A0B4"/>
-                            <Setter Property="Background" Value="#2A0F18"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Type}" Value="spawn">
-                            <Setter Property="Foreground" Value="#7ED8A0"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Type}" Value="exit">
-                            <Setter Property="Opacity" Value="0.6"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </DataGrid.RowStyle>
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Time"         Binding="{Binding Time}"        Width="80"/>
-                <DataGridTextColumn Header="Type"         Binding="{Binding Type}"        Width="90"/>
-                <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"         Width="60"/>
-                <DataGridTextColumn Header="Service(s)"   Binding="{Binding Services}"    Width="180"/>
-                <DataGridTextColumn Header="Parent"       Binding="{Binding Parent}"      Width="110"/>
-                <DataGridTextColumn Header="Destination"  Binding="{Binding Destination}" Width="170"/>
-                <DataGridTextColumn Header="Detail"       Binding="{Binding Detail}"      Width="*"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <Grid Grid.Row="3">
+            <DataGrid x:Name="TraceGrid" SelectionMode="Single" IsReadOnly="True"
+                      FontFamily="Consolas" FontSize="11">
+                <DataGrid.RowStyle>
+                    <Style TargetType="DataGridRow">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Type}" Value="FLAG">
+                                <Setter Property="Foreground" Value="#F2A0B4"/>
+                                <Setter Property="Background" Value="#2A0F18"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Type}" Value="spawn">
+                                <Setter Property="Foreground" Value="#7ED8A0"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding Type}" Value="exit">
+                                <Setter Property="Opacity" Value="0.6"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </DataGrid.RowStyle>
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Time"         Binding="{Binding Time}"        Width="80"/>
+                    <DataGridTextColumn Header="Type"         Binding="{Binding Type}"        Width="90"/>
+                    <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"         Width="60"/>
+                    <DataGridTextColumn Header="Service(s)"   Binding="{Binding Services}"    Width="180"/>
+                    <DataGridTextColumn Header="Parent"       Binding="{Binding Parent}"      Width="110"/>
+                    <DataGridTextColumn Header="Destination"  Binding="{Binding Destination}" Width="170"/>
+                    <DataGridTextColumn Header="Detail"       Binding="{Binding Detail}"      Width="*"/>
+                </DataGrid.Columns>
+            </DataGrid>
+            <!-- Shown only while stopped with no rows — a passive tab must
+                 read as "not tracing", not as broken detection. -->
+            <TextBlock x:Name="EmptyHint"
+                       Text="Trace is stopped — press ▶ Start Trace to begin capturing. The grid fills only while a trace is running; spawns and connections are recorded from the moment it starts."
+                       HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="520"
+                       TextAlignment="Center" TextWrapping="Wrap"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
+                       Visibility="Visible"/>
+        </Grid>
 
         <!-- Analysis report -->
         <GridSplitter Grid.Row="4" Height="6" HorizontalAlignment="Stretch" Background="Transparent"/>
