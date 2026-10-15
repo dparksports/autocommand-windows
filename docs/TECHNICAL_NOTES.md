@@ -171,3 +171,44 @@ Process Monitor, where it can be blocked like any other destination.
 Outside that directory the tab only **reads**: the Sysmon operational channel (EID 1/5/3) and raw packets from the NIC on its own socket. The instrumentation itself is opt-in per python environment: two small files (`PyTraceHook_ac.py` + `.pth`) written into that environment's site-packages, tracked in the manifest, removable from the Instrument dialog. Nothing inside a venv is ever read for correlation; the interpreter binary is never touched.
 
 The app collects **no usage telemetry** — nothing in it sends data anywhere on its own. (Usage analytics via Firebase/GA4 have been removed; the "Telemetry Opt-Out" section above is the Windows-telemetry hardening feature, unrelated.)
+
+## MCP server (AgentProxy)
+
+The "autocommand" MCP server AI clients connect to is **two halves**:
+
+1. **`AutoCommand.AgentProxy.exe`** — the process clients actually spawn. A tiny asInvoker console exe (no WPF, no admin, no UAC) that reads `%LOCALAPPDATA%\AutoCommand\agent\session.json` (port + bearer token, present only while an AI session is active) on every incoming message and forwards each stdin JSON-RPC line to `127.0.0.1:<port>`. With no session it completes the MCP handshake itself ("offline" mode) and answers every tool call with setup guidance, so a client connects cleanly at any time.
+2. **`AgentBridgeService`** — the listener inside the running (elevated) app: raw `TcpListener` on loopback, one minimal HTTP/1.1 request per connection, constant-time bearer-token compare, DNS-rebinding Host check, dispatch through `AgentToolRegistry`.
+
+### Startup prerequisites (the DOTNET_ROOT trap)
+
+Desktop MCP clients (Electron apps especially) routinely bundle their own .NET and export `DOTNET_ROOT` for every child they spawn — sometimes a runtime **older** than the one a framework-dependent apphost needs. The apphost then never falls back to the machine-wide install and exits before any managed code runs: the client just shows "server failed to start", with nothing actionable. For that reason the proxy ships as a **self-contained single-file exe** (runtime bundled, ~15 MB IL-trimmed; `release.ps1` publishes it into the zip's `tools\AgentProxy\`). It performs no framework lookup at all, so a hostile `DOTNET_ROOT` cannot break it.
+
+The app's Register action installs that exe into `%LOCALAPPDATA%\AutoCommand\tools\v<version>\` (a fresh folder per app version — so a version bump always refreshes the deployed bits and a proxy still running from an older folder never locks the copy) and **preflights** it before any client config points at it: the exe must answer an MCP handshake both normally and under a poisoned `DOTNET_ROOT`, or registration refuses to claim success.
+
+### Protocol
+
+Supported `protocolVersion` values (both halves, kept identical): **2024-11-05, 2025-03-26, 2025-06-18**. A supported version is echoed; anything else is answered with the newest supported one (never blind-echoed — echoing "1999-01-01" used to claim a protocol we do not speak). Requests other than `initialize`/`ping` before initialization are refused with `-32002`; `resources/*` and `prompts/*` answer `-32601` (honestly unimplemented). Forwarding failures when the app session goes away answer `-32603` with guidance text. `serverInfo` is identical offline and online (`autocommand` / "AutoCommand (agent bridge)" / app version) so client UIs never relabel the server when a session flips mid-connection.
+
+### Offline vs online
+
+The proxy re-reads `session.json` on every message, so a session started after the client connected takes effect on the next call. The state flip emits exactly one `notifications/tools/list_changed` — only after the response to the in-flight message and only for clients that completed initialization. Proxy lifetimes (spawn parent, client name, stop reason) are appended to the same `%LOCALAPPDATA%\AutoCommand\agent\activity.jsonl` the app writes; stdout stays JSON-RPC only. A parent-PID watchdog plus stdin EOF guarantee the proxy never outlives its client.
+
+### Testing by hand
+
+```powershell
+# full suite: publishes the self-contained proxy like release.ps1, then drives
+# offline/online/flip/restart/error-code/poisoned-DOTNET_ROOT cases
+powershell -File test-agent-proxy.ps1
+
+# install-decision logic (versioned refresh, locked files, fallbacks)
+dotnet run --project ProxyInstallSelfTest
+
+# bridge end-to-end (starts the elevated app headless - UAC prompt)
+powershell -File test-agent-bridge.ps1
+
+# one manual handshake against the deployed copy
+$exe = "$env:LOCALAPPDATA\AutoCommand\tools\AutoCommand.AgentProxy.exe"
+'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"hand-test","version":"0"}}}',
+'{"jsonrpc":"2.0","method":"notifications/initialized"}',
+'{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | & $exe
+```
