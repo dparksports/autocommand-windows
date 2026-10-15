@@ -60,7 +60,7 @@
                         <TextBlock Text="Connect an assistant" Style="{StaticResource SectionHeader}"/>
 
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,8">
-                            <Button x:Name="RegisterZcodeBtn" Content="Register in ZCode (user scope)" Click="RegisterZcodeBtn_Click" Padding="10,2" Margin="0,0,8,0"/>
+                            <StackPanel x:Name="AgentClientsPanel" Orientation="Horizontal"/>
                             <Button x:Name="CopyAgentConfigBtn" Content="Copy MCP config" Click="CopyAgentConfigBtn_Click" Padding="10,2" Margin="0,0,8,0"/>
                             <Button x:Name="OpenAgentLogBtn" Content="Open activity log" Click="OpenAgentLogBtn_Click" Padding="10,2" Margin="0,0,12,0"/>
                         </StackPanel>

@@ -27,6 +27,7 @@ namespace AutoCommand.Views
                 AgentMutatingCheck.IsChecked = File.Exists(prefPath) && File.ReadAllText(prefPath).Trim() == "on";
             }
             catch { AgentMutatingCheck.IsChecked = false; }
+            PopulateClientButtons();
             StartAgentRefresh();
         }
 
@@ -111,99 +112,55 @@ namespace AutoCommand.Views
         }
 
         /// <summary>
-        /// The MCP client spawns THIS exe — the asInvoker proxy, never the
-        /// elevated app itself. Looked up next to the app, in the installed
-        /// tools dir, or in a dev tree; installed to the tools dir when found
-        /// elsewhere so the registered path stays stable across rebuilds.
+        /// One Register button per known MCP client, enabled when the client
+        /// is detected on this machine. Anything undetected stays visible but
+        /// disabled — and 'Copy MCP config' remains the universal fallback.
         /// </summary>
-        private static string ResolveAndInstallProxy()
+        private void PopulateClientButtons()
         {
-            string toolsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AutoCommand", "tools", "AutoCommand.AgentProxy.exe");
-            if (File.Exists(toolsPath)) return toolsPath;
-
-            var candidates = new List<string>
+            AgentClientsPanel.Children.Clear();
+            foreach (var client in McpClientCatalog.Catalog)
             {
-                Path.Combine(AppContext.BaseDirectory, "AutoCommand.AgentProxy.exe"),
-                Path.Combine(AppContext.BaseDirectory, "tools", "AutoCommand.AgentProxy.exe"),
-            };
-            // dev layout: walk up to the repo root, where the proxy's bin lives
-            var dir = AppContext.BaseDirectory;
-            for (int i = 0; i < 6 && dir != null; i++, dir = Path.GetDirectoryName(dir))
-                candidates.Add(Path.Combine(dir, "AgentProxy", "bin", "Debug", "net10.0-windows", "AutoCommand.AgentProxy.exe"));
-
-            string found = candidates.FirstOrDefault(File.Exists);
-            if (found == null) return null;
-
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(toolsPath));
-                File.Copy(found, toolsPath, overwrite: true);
-                return toolsPath;
+                bool detected = McpClientCatalog.IsDetected(client);
+                var btn = new Button
+                {
+                    Content = "Register in " + client.DisplayName,
+                    Tag = client,
+                    Padding = new Thickness(10, 2, 10, 2),
+                    Margin = new Thickness(0, 0, 8, 0),
+                    IsEnabled = detected,
+                    ToolTip = detected
+                        ? client.ConfigPath
+                        : client.DisplayName + " not detected on this machine — install it first, or use Copy MCP config.",
+                };
+                btn.Click += ClientRegisterBtn_Click;
+                AgentClientsPanel.Children.Add(btn);
             }
-            catch { return found; } // copy failed (locked?) — register where it is
         }
 
-        private void RegisterZcodeBtn_Click(object sender, RoutedEventArgs e)
+        private void ClientRegisterBtn_Click(object sender, RoutedEventArgs e)
         {
-            try
+            if (sender is not Button { Tag: McpClientRegistration client }) return;
+
+            string proxy = McpClientCatalog.ResolveAndInstallProxy();
+            if (proxy == null)
             {
-                string proxy = ResolveAndInstallProxy();
-                if (proxy == null)
-                {
-                    MessageBox.Show(
-                        "AutoCommand.AgentProxy.exe was not found next to the app.\n" +
-                        "Reinstall AutoCommand (or rebuild from source) and try again.",
-                        "Be My Guest", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                string configPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".zcode", "cli", "config.json");
-
-                JsonObject root;
-                if (File.Exists(configPath))
-                {
-                    root = JsonNode.Parse(File.ReadAllText(configPath)) as JsonObject ?? new JsonObject();
-                }
-                else
-                {
-                    Directory.CreateDirectory(Path.GetDirectoryName(configPath));
-                    root = new JsonObject();
-                }
-
-                var mcp = root["mcp"] as JsonObject;
-                if (mcp == null) { mcp = new JsonObject(); root["mcp"] = mcp; }
-                var servers = mcp["servers"] as JsonObject;
-                if (servers == null) { servers = new JsonObject(); mcp["servers"] = servers; }
-                servers["autocommand"] = new JsonObject
-                {
-                    ["command"] = proxy,
-                    ["args"] = new JsonArray(),
-                };
-                File.WriteAllText(configPath, root.ToJsonString(
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-
                 MessageBox.Show(
-                    "Registered the 'autocommand' MCP server in ZCode's user config:\n" + configPath +
-                    "\n\nProxy: " + proxy +
-                    "\n\nNew ZCode sessions will auto-connect it. Tools answer with setup guidance " +
-                    "whenever no AI session is active here.",
-                    "Registered", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "AutoCommand.AgentProxy.exe was not found next to the app.\n" +
+                    "Reinstall AutoCommand (or rebuild from source) and try again.",
+                    "Be My Guest", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Could not update the ZCode config:\n" + ex.Message +
-                    "\n\nUse 'Copy MCP config' and add the entry by hand.", "AI access",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
+
+            var (ok, message) = McpClientCatalog.Register(client, proxy);
+            MessageBox.Show(message, ok ? "Registered" : "AI access",
+                MessageBoxButton.OK, ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
 
         private void CopyAgentConfigBtn_Click(object sender, RoutedEventArgs e)
         {
-            string proxy = ResolveAndInstallProxy() ?? "%LOCALAPPDATA%\\AutoCommand\\tools\\AutoCommand.AgentProxy.exe";
+            string proxy = McpClientCatalog.ResolveAndInstallProxy()
+                ?? "%LOCALAPPDATA%\\AutoCommand\\tools\\AutoCommand.AgentProxy.exe";
             string config =
                 "{\n  \"mcp\": {\n    \"servers\": {\n      \"autocommand\": {\n" +
                 "        \"command\": \"" + proxy.Replace("\\", "\\\\") + "\",\n" +
