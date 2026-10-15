@@ -126,6 +126,11 @@ string AnswerOffline(JsonObject rpc)
     }
 }
 
+// The session file is re-read on every incoming message: the client spawns
+// this proxy at ITS startup, possibly long before the user presses
+// "Start AI session" — when that flip happens mid-connection, calls must
+// start working immediately, and the client should re-list tools.
+bool wasOnline = false;
 string line;
 while ((line = Console.ReadLine()) != null)
 {
@@ -143,7 +148,21 @@ while ((line = Console.ReadLine()) != null)
 
     string response;
     var session = ReadSession();
-    if (session != null)
+    bool online = session != null;
+    if (online != wasOnline)
+    {
+        // the button was just pressed (or the session just ended) while this
+        // proxy was already connected — tell the client its cached tool list
+        // is stale; honoring clients re-fetch the full schemas from the app
+        stdout.WriteLine(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["method"] = "notifications/tools/list_changed",
+            ["params"] = new JsonObject(),
+        }.ToJsonString());
+        wasOnline = online;
+    }
+    if (online)
         response = await ForwardAsync(session.Value.Port, session.Value.Token, line);
     else
         response = AnswerOffline(rpc);

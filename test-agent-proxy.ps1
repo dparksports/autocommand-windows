@@ -83,4 +83,45 @@ $allReceived = $received -join "`n"
 Remove-Item $sessionPath -ErrorAction SilentlyContinue
 if ($hadSessionFile) { Rename-Item "$sessionPath.smoketest-backup" $sessionPath }
 Remove-Item $mockScript, "$env:TEMP\agent-mock-received.txt" -ErrorAction SilentlyContinue
+
+# ── 3. transition: client connects FIRST, button pressed LATER ────────────────
+"--- TRANSITION (connect offline -> session starts mid-connection) ---"
+if (Test-Path $sessionPath) { Remove-Item $sessionPath }
+# mock listener on a second port (accepts exactly ONE connection: the
+# transition test forwards a single call)
+$mockCode2 = $mockCode -replace '47955', '47956' -replace '\$i -lt 2', '$i -lt 1'
+$mockScript2 = Join-Path $env:TEMP 'agent-mock2.ps1'
+Set-Content $mockScript2 $mockCode2
+$mock2 = Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mockScript2 -PassThru -WindowStyle Hidden
+Start-Sleep -Milliseconds 1200
+
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $proxy
+$psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true
+$psi.UseShellExecute = $false
+$proc2 = [System.Diagnostics.Process]::Start($psi)
+
+# before the session: call must answer with guidance
+$proc2.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_monitor_rows","arguments":{}}}')
+Start-Sleep -Milliseconds 800
+# the "button press": session file appears, pointing at the mock
+@{ port = 47956; token = 'TRANSITIONTOKEN'; pid = 999 } | ConvertTo-Json | Set-Content $sessionPath
+$proc2.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_monitor_rows","arguments":{}}}')
+$proc2.StandardInput.Close()
+$proc2.WaitForExit(15000) | Out-Null
+$out3 = $proc2.StandardOutput.ReadToEnd()
+
+$guidance = $false; $changed = $false; $forwarded = $false
+foreach ($l in ($out3 -split "`n" | Where-Object { $_.Trim() })) {
+    $o = $l | ConvertFrom-Json
+    if ($o.method -eq 'notifications/tools/list_changed') { $changed = $true }
+    elseif ($o.result -and $o.result.isError) { $guidance = $true }
+    elseif ($o.result -and $o.result.echo -eq 'mock-ok') { $forwarded = $true }
+}
+"offline call first:   $guidance (expect True)"
+"list_changed pushed:  $changed (expect True)"
+"call after start:     $forwarded (expect True)"
+
+Wait-Process -Id $mock2.Id -ErrorAction SilentlyContinue
+Remove-Item $sessionPath, $mockScript2 -ErrorAction SilentlyContinue
 "PROXY SMOKE TEST DONE"
