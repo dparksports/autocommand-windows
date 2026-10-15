@@ -301,8 +301,8 @@ namespace AutoCommand.Services
                         var args = @params?["arguments"] as JsonObject ?? new JsonObject();
                         ConnectedCalls++;
                         var (content, isError) = await CallToolAsync(name, args);
-                        LogActivity("tool", name, SummarizeArgs(args), isError == true ? "error" : "ok");
-                        Activity?.Invoke($"tool {name} → {(isError == true ? "error" : "ok")}");
+                        LogActivity("tool", name, SummarizeArgs(args), isError ? "error" : "ok");
+                        Activity?.Invoke($"tool {name} → {(isError ? "error" : "ok")}");
                         return RpcResult(rpc["id"], new JsonObject
                         {
                             ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = content } },
@@ -325,7 +325,7 @@ namespace AutoCommand.Services
             }
         }
 
-        private async Task<(string content, bool? isError)> CallToolAsync(string name, JsonObject args)
+        private async Task<(string content, bool isError)> CallToolAsync(string name, JsonObject args)
         {
             var tool = AgentToolRegistry.Find(name, _allowMutating);
             if (tool == null) return ($"Unknown tool '{name}' (or mutating tools are disabled for this session).", true);
@@ -336,7 +336,7 @@ namespace AutoCommand.Services
                 if (!allowed) return ($"User denied '{name}'" + (note.Length > 0 ? $" — {note}" : "") + ".", true);
             }
             string output = await Task.Run(() => tool.Handler(args));
-            return (output, null);
+            return (output, false);
         }
 
         private bool SessionGranted(string tool)
