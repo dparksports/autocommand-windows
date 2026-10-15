@@ -1,20 +1,20 @@
 # AutoCommand — see what your Windows PC is really doing, then take it back with one click
 
-![AutoCommand](Assets/corp_banner.png?v=fluent1)
+![AutoCommand](Assets/corp_banner.png?v=fluent2)
 
 A free, open-source security and control dashboard for Windows 10 and 11. One administrator window answers every question that normally costs you an afternoon — *what is this process, who launched it, where is it connecting, how do I make it stop?* — as a row in a table, a colored card, or a single button, in a clean Fluent design with light and dark themes.
 
-> **⬇ Download** the latest self-contained build from the [**Releases page**](https://github.com/dparksports/autocommand-windows/releases) — no .NET required. Unzip, run `AutoCommand.exe` as Administrator.
+> **⬇ Download** the latest self-contained build from the [**Releases page**](https://github.com/dparksports/autocommand-windows/releases/latest) — no .NET required. Unzip, run `AutoCommand.exe` as Administrator.
 >
 > **🔧 How it works inside:** every technology below is documented in the [Technical Notes](docs/TECHNICAL_NOTES.md). Apache 2.0.
 
----
+> **🛡 Looking for the setup side?** The first-hour ritual — debloat, firewall presets, privacy opt-outs, OS hardening, update freezes — lives in its own app: [**Shields Up**](https://github.com/dparksports/shields-up/releases/latest) (same author, same undo-first design). AutoCommand stays what this README covers: the analyst toolkit.
 
-> **🛡 Looking for the setup side?** The first-hour ritual — debloat, firewall presets, privacy opt-outs, OS hardening, update freezes — moved to its own app: [**Shields Up**](https://github.com/dparksports/shields-up/releases/latest) (same author, same undo-first design). AutoCommand stays what this README covers: the analyst toolkit.
+---
 
 ## You've been here
 
-![Why AutoCommand](Assets/corp_why.png?v=fluent1)
+![Why AutoCommand](Assets/corp_why.png?v=fluent2)
 
 - **A python.exe you didn't start is sending packets to four Google addresses.** Task Manager shows you the number and nothing else. AutoCommand shows the script's full command line, its parent, every destination with reverse DNS — and, for environments you instrument, the decrypted request and the call stack that fired it.
 - **You opted out of telemetry. It kept sending.** Some apps read `"sync": "false"` — quoted — as *on*. AutoCommand writes the opt-out in the exact type the app parses, re-reads the file to verify, and shows **Not honored** in amber when the app is lying. And for the ones that ignore switches entirely: pin the beacon domain, or sinkhole it and watch every denied attempt by PID and command line.
@@ -36,10 +36,12 @@ A free, open-source security and control dashboard for Windows 10 and 11. One ad
 | 🕳 **Black Hole** | The other half of blocking telemetry: proof it worked. A **Protection status** card answers the real question — what is actually standing between each app and its beacons: flag state (opted out / on / not honored), pin state, and whether any python processes started before the flag was applied are still beaconing under the old setting — and then lets you act on it right there: **Opt out**, **Block & log** (pin + sinkhole in one click, first knocked attempt lands in the feed seconds later), **Remove block**, **Revert**, each with full disclosure. With **Black Hole logging** on, every denied attempt is caught live — hostname from the TLS hello, PID from the OS connection table, process image and command line — counted per domain and per process, persisted as plain JSONL, exportable to CSV. |
 | 🧵 **Taskhostw Spawns** | The same spawn tracing for `taskhostw.exe` — and the "why" is built in: each row resolves to the **scheduled task** that launched it (task path, user context, COM-handler DLL), with the full task summary and the PID-inquiry trace one click away. |
 | 🔬 **Svchost Trace** | A timeline over the 70+ `svchost.exe` service hosts — spawns with parents, connection lifetimes, byte flows — plus a pattern detector: bad parents, respawn loops, beacon-regular connections, upload-dominant flows. Exports JSONL; drives a headless capture service with boot auto-start. The capture engine is built into the app (no separate binary to install or unblock). Headless 24/7 recording with boot auto-start uses the standalone SvchostAnalyzer.exe host, which is no longer distributed with releases — an already-installed copy keeps working. |
+| 🔐 **Data & Privacy** | Live data-sharing settings, the who-receives catalog, and a US privacy-rights request builder. |
+| 🤖 **Be My Guest** | AI access, by invitation: let an assistant (ZCode, Claude, …) read this machine's security telemetry through a local MCP endpoint — **only while you say so**. One dialog states exactly what is readable; the session listens on `127.0.0.1` only, guarded by a per-session token that never touches disk; read-only tools answer immediately, mutating ones ask on every action (and only exist at all if you tick them on); every tool call lands in the live activity log; stopping the session or closing the app kills the token. One click registers the server in ZCode — clients spawn a small asInvoker proxy, never this elevated app — or copy the MCP config for any other client. Scripts and CI: `AutoCommand.exe --agent-headless [seconds]` runs a read-only, no-UI session. |
 | 🔄 **OneSettings** | How often Windows fetches OneSettings remote config (feature flags, experiment cohorts): the inbox `RefreshCache` task runs ~20-40x/day as SYSTEM; here you lower it to any cadence (default 24h) with a timestamped backup, live verification, automatic rollback, and one-click restore to stock — plus **proof it is holding**: observed launches from Task Scheduler history vs expected, bucketed by why each fired (timer / WNF / manual), with drift detection (Windows servicing rewrites inbox tasks; an optional SYSTEM watchdog re-applies your cadence daily) and a machine-readable audit trail of every change. |
-| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai. |
+| ⚙ **Settings** | Appearance — **Dark/Light theme, applied instantly and remembered**; startup behavior, live version — an **Unblock card** that strips the Mark-of-the-Web SmartScreen/Smart App Control blocks on (this app's folder, or any folder — see the standalone `unblock-autocommand.ps1` release asset) — and the status bar's **🚑 Restore Internet** button. The About card signs off: Made with ❤️ in California · Apache License 2.0 · © 2026 Dan Park, magicpoint.ai — and carries the **community graph** + **share** buttons ([live count](https://autocommand-usage-ping.dpark-sports.workers.dev/)). |
 
-![See everything](Assets/corp_visibility.png?v=fluent1)
+![See everything](Assets/corp_visibility.png?v=fluent2)
 
 ## Python Spawns, in depth
 
@@ -66,9 +68,20 @@ Blocking is easy; *knowing it worked* is where other tools strand you. A hosts-f
 - **The protection status card** — because "blocked" means two different things. A flag opt-out only governs processes started after the change (ultralytics decides at import; yesterday's still-running script keeps beaconing under the old setting — the card counts those processes by comparing start times against the settings file). A pin stops everything immediately, and only pinned attempts appear in this tab's feed.
 - **Honest edges, stated in the tab itself** — proof collects while the app runs (with it closed, attempts still fail instantly, just unlogged); silent (`0.0.0.0`) pins deny attempts but leave nothing observable to log — that is what the logging mode is for; if another local server already owns `127.0.0.1:443` (local HTTPS dev is the usual suspect) the sinkhole stays off and says so while the pin keeps blocking; pin addresses are only ever `0.0.0.0` or `127.0.0.1`, enforced in code — a tampered rules file cannot redirect a domain anywhere else.
 
+## Be My Guest, in depth
+
+An AI assistant that can read your security telemetry is either a superpower or a liability — the difference is entirely in who flips the switch. This tab (🤖 **Be My Guest**) makes the app the one holding the switch:
+
+![Be My Guest](Assets/corp_ai.png?v=1)
+
+- **Consent first, stated plainly.** Starting a session is one dialog that says exactly what the assistant will be able to read — live connections and their processes, svchost identities, PID provenance reports, Sysmon events and trace analysis — and that what it reads can be repeated by the assistant. That is the consent you are giving, spelled out before you give it.
+- **Least privilege by construction.** The session listens on `127.0.0.1` only — never a LAN interface — and is guarded by a per-session token that lives in memory alone (it never appears in any config file or log). Read-only tools answer immediately; mutating tools (block IP, kill process, disable task) exist only if you tick them on, and then still ask on **every single call**. Nothing an assistant does is ever silent.
+- **Everything is on the record.** The activity log shows every tool call live, and persists under `%LOCALAPPDATA%\AutoCommand\agent` for later review. The end is as concrete as the start: stop the session, close AutoCommand, or the app exits — the token dies, and a dead token opens nothing. (`OnExit` enforces it even on a crash-next-launch.)
+- **The client never gets the keys to the app.** MCP clients spawn `AutoCommand.AgentProxy.exe`, a small asInvoker forwarder deployed next to the app — the elevated AutoCommand itself is never launched by an assistant. One click registers the server in ZCode's user config; *Copy MCP config* covers any other client. For scripts and CI there is `--agent-headless [seconds]`: a no-UI, **read-only** session that ends on timeout or when stdin closes — mutating tools are always off there, since nothing can confirm an action without the app's UI.
+
 ## Opt-outs that actually hold
 
-![Update Control + Telemetry](Assets/corp_control.png?v=fluent1)
+![Update Control + Telemetry](Assets/corp_control.png?v=fluent2)
 
 The Telemetry page (Shields Up) applies each vendor's own documented switch — and this release makes three guarantees the ecosystem rarely gives you:
 
@@ -86,12 +99,12 @@ Blocking is easy; *un*-blocking is where other tools strand you. AutoCommand:
 - **verifies unknown IPs for you** — one button asks the internet registries (RDAP) who owns each target, cached machine-wide;
 - **restores you from mistakes** — the status-bar 🚑 button disables every AutoCommand block and flushes DNS in one click; *Restore except Microsoft/Windows* brings your real blocks back while leaving only the breakage-causing ones off.
 
-![Hardening](Assets/corp_hardening.png?v=fluent1)
+![Hardening](Assets/corp_hardening.png?v=fluent2)
 
 ## What AutoCommand will not do
 
 - **Nothing runs without you.** Blocks, kills, and instrumentation installs all confirm first.
-- **Observational by default.** The spawn/connection tabs only watch; the invasive capabilities (call stacks, TLS plaintext) exist solely for python environments you explicitly instrument.
+- **Observational by default.** The spawn/connection tabs only watch; the invasive capabilities (call stacks, TLS plaintext) exist solely for python environments you explicitly instrument — and the Be My Guest endpoint answers nothing at all until you start a session.
 - **No hidden state.** Everything the app remembers is readable JSON/text on disk (listed in the [Technical Notes](docs/TECHNICAL_NOTES.md)); the app sends **nothing by default**. The sole optional exception is an **opt-in, anonymous usage count** — compact build date (e.g. `261015`) and Windows build, at most once a day, **no identifier of any kind (not even a random one)**, IP never stored — offered at most three times, off unless you say yes, and revocable anytime ([privacy policy](PRIVACY.md); spec + server code are public in the repo's `telemetry/` folder — verify, don't trust).
 
 ## Build from source

@@ -9,7 +9,7 @@ exactly 3 steps: big number + 2-4 word label + ONE line of <= 9 words.
 
 Usage:  python Assets/regenerate_infographics.py
 Outputs: corp_banner, corp_why, corp_debloat, corp_visibility,
-         corp_control, corp_hardening  (.png, 2250x1410)
+         corp_control, corp_hardening, corp_ai (.png, 2250x1410)
 Requires: matplotlib
 """
 import os
@@ -126,7 +126,8 @@ def banner():
     ax.text(MARGIN, 690, "See what your Windows PC is really doing — then take it back, one click at a time.",
             fontsize=30, color=MUTED, va="center")
     pill_row(ax, fig, ["See every connection", "Know who launched it",
-                       "Block in one click", "Undo just as fast"], 900)
+                       "Block in one click", "Undo just as fast",
+                       "AI only with consent"], 900)
     finish(fig, "corp_banner.png")
 
 
@@ -195,5 +196,18 @@ def hardening():
     finish(fig, "corp_hardening.png")
 
 
+# ── 7. be my guest (AI access) ───────────────────────────────────────────
+def ai():
+    fig, ax = canvas()
+    header(ax, fig, "Be My Guest", "You decide what the AI reads.",
+           "Consent first, a live activity log, and one click to revoke.")
+    three_steps(ax, fig, [
+        ("Consent", "One dialog states exactly what is readable."),
+        ("Watch", "Every tool call lands in the activity log."),
+        ("Revoke", "Stop the session — its token dies with it."),
+    ])
+    finish(fig, "corp_ai.png")
+
+
 if __name__ == "__main__":
-    banner(); why(); debloat(); visibility(); control(); hardening()
+    banner(); why(); debloat(); visibility(); control(); hardening(); ai()

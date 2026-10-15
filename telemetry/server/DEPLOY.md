@@ -44,6 +44,11 @@ wrangler deploy
 
 ## Day-to-day
 
+> **Automated:** `powershell -File snapshot-usage.ps1 -Install` registers a
+> weekly scheduled task that snapshots /v1/stats + GitHub downloads into
+> `fundraising/metrics/history/` and runs the plausibility anchor. Details:
+> `docs/WEEKLY_RITUAL.md`. The manual commands below still work.
+
 ```powershell
 # Weekly numbers (the investor table):
 curl -H "Authorization: Bearer <ADMIN_TOKEN>" https://<your-worker>/v1/stats
@@ -61,7 +66,15 @@ per-user metrics because there are no users in the data — by design.
 
 Save the `/v1/stats` output weekly into `../../fundraising/metrics/` (see
 `pull-github-metrics.ps1` for the download-count side) — that becomes the
-traction time series for the raise.
+traction time series for the raise. (Or let `snapshot-usage.ps1 -Install`
+do it — see `docs/WEEKLY_RITUAL.md`.)
+
+> **Operational note — fresh deploys:** the smoke tests can false-fail for
+> about a minute after the very first deploy (the worker reports deployed
+> before the D1 binding has propagated to every edge colo — transient
+> 500/404). Re-run the script before diagnosing; it is idempotent. Verified
+> live on the first-ever deploy: 5/6 FAILs, then all PASS on re-run with
+> zero changes.
 
 ## Hardening (5 minutes, one-time)
 
