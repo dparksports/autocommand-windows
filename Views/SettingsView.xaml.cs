@@ -389,5 +389,33 @@ namespace AutoCommand.Views
             Directory.CreateDirectory(dir);
             Process.Start(new ProcessStartInfo("explorer.exe", $"\"{dir}\"") { UseShellExecute = true });
         }
+
+        // ── Community: the live anonymous count + share ─────────────────────
+
+        private void CommunityGraph_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // The worker serves the graph page at its root; before the
+                // endpoint is deployed, fall back to the releases page.
+                string url = UsagePingService.GraphPageUrl ?? UsagePingService.ReleasesUrl;
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            }
+            catch { /* browser launch refused — nothing to do */ }
+        }
+
+        private void Share_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string url = UsagePingService.GraphPageUrl ?? UsagePingService.ReleasesUrl;
+                Clipboard.SetText(url);
+                ShareStatusText.Text = "Link copied — every install counts. Thank you!";
+                var clear = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                clear.Tick += (s, _) => { ShareStatusText.Text = ""; clear.Stop(); };
+                clear.Start();
+            }
+            catch { /* clipboard unavailable — nothing to do */ }
+        }
     }
 }

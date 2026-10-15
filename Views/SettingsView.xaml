@@ -190,6 +190,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="Application Information" Style="{StaticResource SectionHeader}"/>
@@ -207,6 +208,20 @@
                                        Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11"/>
                             <TextBlock Text="© 2026 Dan Park, magicpoint.ai" Margin="0,10,0,0"
                                        Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" FontWeight="SemiBold"/>
+                        </StackPanel>
+
+                        <!-- Community: the live anonymous count + share -->
+                        <StackPanel Grid.Row="3" Margin="0,14,0,0">
+                            <WrapPanel>
+                                <Button x:Name="CommunityGraphBtn" Content="📈 Community graph" Style="{StaticResource PrimaryButton}"
+                                        Click="CommunityGraph_Click" Margin="0,0,8,0"
+                                        ToolTip="How many people run AutoCommand — an anonymous opt-in daily count, charted live. Opens the public page in your browser."/>
+                                <Button x:Name="ShareBtn" Content="🔗 Share AutoCommand" Style="{StaticResource PrimaryButton}"
+                                        Click="Share_Click"
+                                        ToolTip="Copy the download link and pass it to a peer who needs to see what their PC is really doing."/>
+                            </WrapPanel>
+                            <TextBlock x:Name="ShareStatusText" Margin="0,8,0,0" FontSize="11"
+                                       Foreground="{DynamicResource TextSecondaryBrush}" Text=""/>
                         </StackPanel>
                     </Grid>
                 </Border>

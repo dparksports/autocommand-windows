@@ -77,6 +77,13 @@ namespace AutoCommand
             // its recorder to the sinkhole. No sinkhole pins → both are no-ops.
             Services.SinkholeService.Instance.EnsureRunningForCurrentPins();
             _ = Services.TelemetryProofService.Instance.TotalDenied;
+
+            // Anonymous usage ping (opt-in, off by default): sends the user's
+            // answer into effect — consented installs ping once a day, everyone
+            // else is never asked again after the bounded offer. Fully inert
+            // while UsagePingService.Endpoint is unconfigured. Spec and server
+            // code: telemetry/ in the repository.
+            _ = Services.UsagePingService.RunStartupFlowAsync();
         }
 
         // Headless AI session: same bridge the Settings card starts, minus the
