@@ -1,0 +1,26 @@
+<Window x:Class="AutoCommand.Views.AgentConfirmWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AI access — action needs your approval"
+        Width="460" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        Background="{DynamicResource SurfaceBrush}"
+        ShowInTaskbar="False">
+    <StackPanel Margin="20">
+        <TextBlock x:Name="HeadText" TextWrapping="Wrap" FontSize="14" FontWeight="SemiBold"
+                   Foreground="{DynamicResource TextPrimaryBrush}"/>
+        <TextBlock x:Name="DetailText" TextWrapping="Wrap" Margin="0,10,0,0" FontSize="12"
+                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+        <TextBlock Text="The requesting assistant sees only 'allowed' or 'denied' — this answer is not sent anywhere else."
+                   TextWrapping="Wrap" Margin="0,10,0,0" FontSize="11" FontFamily="Consolas"
+                   Foreground="{DynamicResource TextSecondaryBrush}"/>
+        <CheckBox x:Name="AlwaysCheck" Content="Allow this tool for the rest of the session (no more asks)"
+                  Margin="0,12,0,0" Foreground="{DynamicResource TextPrimaryBrush}"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Deny" Click="DenyBtn_Click" Padding="16,4" Margin="0,0,8,0"/>
+            <Button x:Name="AllowBtn" Content="Allow once" Style="{StaticResource PrimaryButton}"
+                    Padding="16,4" Click="AllowBtn_Click"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

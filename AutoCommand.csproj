@@ -31,6 +31,17 @@
          The standalone CLI exe is not built or shipped; already-installed
          boot-autostart copies keep working. -->
     <ProjectReference Include="svchost-watch\SvchostAnalyzer.Core\SvchostAnalyzer.Core.csproj" />
+    <!-- The MCP client's spawn target: a tiny asInvoker console exe (no admin,
+         no UAC) that forwards to this app's AI-access listener. Built and
+         published alongside the app; Settings > AI access installs a copy to
+         %LOCALAPPDATA%\AutoCommand\tools and points the client's MCP config
+         at it. This exe itself must never be the spawn target — it carries
+         requireAdministrator. -->
+    <ProjectReference Include="AgentProxy\AutoCommand.AgentProxy.csproj" />
+    <!-- OneSettings cadence engine, linked in-process for the OneSettings tab
+         (same in-process pattern as SvchostAnalyzer.Core; the OneSettingsCadence
+         CLI exe builds separately over the same Core project). -->
+    <ProjectReference Include="OneSettingsCadence\OneSettingsCadence.Core\OneSettingsCadence.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -60,10 +71,19 @@
          Main() (same reason as ScratchTest) -->
     <Compile Remove="PyTraceSelfTest\**" />
     <Compile Remove="TaskAttributionSelfTest\**" />
+    <Compile Remove="OneSettingsCadenceSelfTest\**" />
     <!-- Vendored engine: compiled through its own ProjectReference — without
          this exclusion the default glob would pull its .cs into the app
          assembly too (duplicate types, and the CLI's top-level Program). -->
     <Compile Remove="svchost-watch\**" />
+    <!-- Agent proxy: built through its own ProjectReference — same glob
+         reason as svchost-watch (its obj\** auto-generated sources would be
+         double-compiled into the WPF temp project) -->
+    <Compile Remove="AgentProxy\**" />
+    <!-- OneSettings cadence CLI — standalone console tool for the inbox
+         OneSettings RefreshCache task, built separately (dotnet build
+         OneSettingsCadence\OneSettingsCadence.csproj); own Main() -->
+    <Compile Remove="OneSettingsCadence\**" />
   </ItemGroup>
 
   <!-- Filter out Linux .so native binaries when publishing for Windows win-x64 -->

@@ -144,7 +144,8 @@ namespace AutoCommand.Views
             }
         }
 
-        private static string BuildReportText(ProvenanceReport r)
+        /// <summary>The full report text — shared with the AI-access bridge's run_pid_inquiry tool.</summary>
+        public static string BuildReportText(ProvenanceReport r)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"PID INQUIRY — {r.Pid} · {r.Name}");
