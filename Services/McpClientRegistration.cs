@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -174,14 +175,15 @@ namespace AutoCommand.Services
 
         // ── proxy install ─────────────────────────────────────────────────
 
-        /// <summary>
-        /// The proxy is a real .NET app: an apphost exe without its .dll,
-        /// .runtimeconfig.json and .deps.json next to it cannot start at all
-        /// ("The application to execute does not exist"). Any install must
-        /// carry the complete file set — or register the exe where the
-        /// complete set already lives.
-        /// </summary>
-        private static readonly string[] ProxyFileSet =
+        // The proxy ships as a self-contained single-file exe (release.ps1
+        // publishes it into the zip's tools\AgentProxy\): the runtime is
+        // bundled, so no framework lookup happens at spawn time and a client
+        // that exports its own DOTNET_ROOT (desktop MCP clients bundling an
+        // older .NET do this) cannot break it. The framework-dependent
+        // 4-file set this class used to copy is legacy — still honored as a
+        // previously-installed fallback, never written anew.
+
+        private static readonly string[] LegacyProxyFiles =
         {
             "AutoCommand.AgentProxy.exe",
             "AutoCommand.AgentProxy.dll",
@@ -189,54 +191,231 @@ namespace AutoCommand.Services
             "AutoCommand.AgentProxy.deps.json",
         };
 
-        private static string ToolsDir => Path.Combine(
+        private static string ToolsRoot => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AutoCommand", "tools");
 
-        private static bool FileSetComplete(string dir) =>
-            ProxyFileSet.All(f => File.Exists(Path.Combine(dir, f)));
+        // A versioned install counts as complete only when its marker file
+        // exists — the marker is written last, after every file copied
+        // cleanly, so a half-copied folder is never handed to a client.
+        private static bool VersionedInstallComplete(string dir) =>
+            File.Exists(Path.Combine(dir, "proxy.installed"));
+
+        private static bool LegacyComplete(string dir) =>
+            LegacyProxyFiles.All(f => File.Exists(Path.Combine(dir, f)));
+
+        private static string AppVersion()
+        {
+            try { return FileVersionInfo.GetVersionInfo(Environment.ProcessPath).ProductVersion ?? "0"; }
+            catch { return "0"; }
+        }
 
         /// <summary>
-        /// Find a runnable proxy and return the path MCP configs should spawn.
-        ///   • tools dir already holds a complete set → stable path, done
-        ///   • self-contained app dir (hostfxr.dll present) → register in
-        ///     place; the runtime lives beside the exe and copying only our
-        ///     few files would strand the apphost
-        ///   • framework-dependent source (dev tree) → copy the file set to
-        ///     the stable tools path (the machine building it has the runtime)
+        /// Installs (or finds) the proxy MCP configs should spawn and returns
+        /// its path plus a human-readable note about what happened. Installs
+        /// go to tools\v&lt;appVersion&gt;\ — a fresh folder per app version, so a
+        /// proxy still running from an older folder never locks the copy, and
+        /// a version bump always refreshes the deployed bits (the old "files
+        /// exist → skip" check left clients pinned to ancient builds forever).
+        /// A dev-tree or in-zip source path is only ever a COPY SOURCE — on
+        /// failure the previously-good install is kept and the failure is
+        /// reported, never silently registered.
+        /// Core with injectable inputs so ProxyInstallSelfTest can drive it.
         /// </summary>
-        public static string ResolveAndInstallProxy()
+        internal static (string ProxyPath, string Message) ResolveAndInstallProxy(
+            string appVersion, string toolsRoot, IEnumerable<string> sourceDirs)
         {
-            string toolsExe = Path.Combine(ToolsDir, "AutoCommand.AgentProxy.exe");
-            if (FileSetComplete(ToolsDir)) return toolsExe;
+            string target = Path.Combine(toolsRoot, "v" + appVersion);
+            string targetExe = Path.Combine(target, "AutoCommand.AgentProxy.exe");
 
-            var sourceDirs = new List<string>
-            {
-                AppContext.BaseDirectory,
-                Path.Combine(AppContext.BaseDirectory, "tools"),
-            };
-            // dev layout: walk up to the repo root, where the proxy's bin lives
-            string dir = AppContext.BaseDirectory;
-            for (int i = 0; i < 6 && dir != null; i++, dir = Path.GetDirectoryName(dir))
-                sourceDirs.Add(Path.Combine(dir, "AgentProxy", "bin", "Debug", "net10.0-windows"));
+            if (VersionedInstallComplete(target))
+                return (targetExe, "proxy v" + appVersion + " already installed");
 
+            string firstError = null;
             foreach (string src in sourceDirs)
             {
-                if (!FileSetComplete(src)) continue;
-
-                if (File.Exists(Path.Combine(src, "hostfxr.dll"))) // self-contained publish
-                    return Path.Combine(src, "AutoCommand.AgentProxy.exe");
-
+                if (!File.Exists(Path.Combine(src, "AutoCommand.AgentProxy.exe"))) continue;
                 try
                 {
-                    Directory.CreateDirectory(ToolsDir);
-                    foreach (string f in ProxyFileSet)
-                        File.Copy(Path.Combine(src, f), Path.Combine(ToolsDir, f), overwrite: true);
-                    return toolsExe;
+                    Directory.CreateDirectory(target);
+                    foreach (string file in Directory.GetFiles(src))
+                        File.Copy(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+                    File.WriteAllText(Path.Combine(target, "proxy.installed"),
+                        new JsonObject { ["version"] = appVersion, ["copiedUtc"] = DateTime.UtcNow.ToString("o") }.ToJsonString());
+                    CleanStaleInstalls(toolsRoot, keep: target);
+                    return (targetExe, "installed proxy v" + appVersion + " from " + src);
                 }
-                catch { return Path.Combine(src, "AutoCommand.AgentProxy.exe"); } // copy failed (locked?) — register where it is
+                catch (Exception ex)
+                {
+                    firstError ??= ex.Message; // remember why, try the next source
+                    TryDeleteDir(target);      // half-copied folder must not look complete
+                }
             }
-            return null;
+
+            // nothing installable — keep the previously-good path (newest
+            // complete versioned install, else the legacy flat set) and say so
+            (string ProxyPath, string Message) Keep(string what, string path) =>
+                (path, "could not install proxy v" + appVersion +
+                       (firstError != null ? " (" + firstError + ")" : " (no source found)") +
+                       " — keeping " + what);
+
+            string fallback = null;
+            try
+            {
+                fallback = Directory.Exists(toolsRoot)
+                    ? Directory.GetDirectories(toolsRoot, "v*")
+                        .Where(VersionedInstallComplete)
+                        .OrderByDescending(TryParseVersion)
+                        .FirstOrDefault()
+                    : null;
+            }
+            catch { /* unreadable tools dir — fall through to legacy */ }
+            if (fallback != null)
+                return Keep("the existing " + Path.GetFileName(fallback), Path.Combine(fallback, "AutoCommand.AgentProxy.exe"));
+            if (LegacyComplete(toolsRoot))
+                return Keep("the legacy flat install", Path.Combine(toolsRoot, "AutoCommand.AgentProxy.exe"));
+            return (null, "no runnable AutoCommand.AgentProxy.exe found next to the app (sources: " +
+                          string.Join("; ", sourceDirs) + ")" +
+                          (firstError != null ? " — " + firstError : ""));
+        }
+
+        private static Version TryParseVersion(string versionedDir)
+        {
+            try { return new Version(Path.GetFileName(versionedDir).Substring(1)); }
+            catch { return new Version(0, 0); }
+        }
+
+        /// <summary>
+        /// Best-effort cleanup: drop older versioned folders and the legacy
+        /// flat files once a newer versioned install exists. A running proxy
+        /// holds its files locked — those deletes quietly fail and are
+        /// retried on the next install. Never touches the folder just kept.
+        /// </summary>
+        private static void CleanStaleInstalls(string toolsRoot, string keep)
+        {
+            try
+            {
+                foreach (string dir in Directory.GetDirectories(toolsRoot, "v*"))
+                    if (!string.Equals(dir, keep, StringComparison.OrdinalIgnoreCase))
+                        TryDeleteDir(dir);
+                foreach (string file in LegacyProxyFiles) // legacy flat set
+                    TryDeleteFile(Path.Combine(toolsRoot, file));
+            }
+            catch { /* cleanup is opportunistic */ }
+        }
+
+        private static void TryDeleteDir(string dir)
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { }
+        }
+
+        private static void TryDeleteFile(string file)
+        {
+            try { if (File.Exists(file)) File.Delete(file); } catch { }
+        }
+
+        /// <summary>
+        /// Real-input wrapper: sources are searched best-first — the zip's
+        /// tools\AgentProxy beside the running app (release layout), then the
+        /// repo's publish\v*\tools\AgentProxy and the proxy's own bin\
+        /// (dev layout; Release preferred over Debug, newest TFM wins — no
+        /// hardcoded TFM string to go stale).
+        /// </summary>
+        public static (string ProxyPath, string Message) ResolveAndInstallProxy()
+        {
+            var sources = new List<string>();
+            string dir = AppContext.BaseDirectory;
+            for (int i = 0; i < 6 && dir != null; i++, dir = Path.GetDirectoryName(dir))
+            {
+                sources.Add(Path.Combine(dir, "tools", "AgentProxy")); // release layout
+                string publishRoot = Path.Combine(dir, "publish");     // dev: release.ps1 output
+                if (Directory.Exists(publishRoot))
+                    foreach (string v in Directory.GetDirectories(publishRoot, "v*").OrderByDescending(TryParseVersion))
+                        sources.Add(Path.Combine(v, "tools", "AgentProxy"));
+                string proxyBin = Path.Combine(dir, "AgentProxy", "bin"); // dev: any build output
+                if (Directory.Exists(proxyBin))
+                    foreach (string cfg in new[] { "Release", "Debug" })
+                    {
+                        string cfgDir = Path.Combine(proxyBin, cfg);
+                        if (!Directory.Exists(cfgDir)) continue;
+                        foreach (string tfm in Directory.GetDirectories(cfgDir).OrderByDescending(n => n, StringComparer.OrdinalIgnoreCase))
+                            sources.Add(tfm); // framework-dependent exe, plus any win-x64\publish under it
+                    }
+            }
+            return ResolveAndInstallProxy(AppVersion(), ToolsRoot,
+                sources.Where(s => Directory.Exists(s)).Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        // ── proxy preflight ───────────────────────────────────────────────
+
+        /// <summary>
+        /// Proves the installed proxy actually starts and speaks MCP before
+        /// any client config points at it — twice: once with this process's
+        /// environment, and once with DOTNET_ROOT/DOTNET_ROOT_X64 pointed at
+        /// an empty folder. That second case is the real-world trap: desktop
+        /// MCP clients routinely bundle their own (older) .NET and export
+        /// DOTNET_ROOT for everything they spawn, which kills a
+        /// framework-dependent apphost before any managed code runs. A
+        /// self-contained proxy ignores DOTNET_ROOT and passes both.
+        /// </summary>
+        public static (bool Ok, string Message) PreflightProxy(string proxyExe)
+        {
+            if (proxyExe == null || !File.Exists(proxyExe))
+                return (false, "AutoCommand.AgentProxy.exe is not where it was just installed:\n" + proxyExe);
+
+            string plain = HandshakeOnce(proxyExe, null, out string err1);
+            if (plain == null)
+                return (false, "the proxy did not answer an MCP handshake when spawned normally:\n" + err1);
+
+            string emptyRoot = Path.Combine(Path.GetTempPath(), "autocommand-empty-dotnet-root");
+            Directory.CreateDirectory(emptyRoot);
+            string poisoned = HandshakeOnce(proxyExe, emptyRoot, out string err2);
+            if (poisoned == null)
+                return (false, "the proxy starts normally but dies under a hostile DOTNET_ROOT — " +
+                    "the classic desktop-MCP-client failure. Reinstall AutoCommand and register again.\n" + err2);
+
+            return (true, null);
+        }
+
+        /// <summary>Sends one initialize line, expects one JSON-RPC result line back.</summary>
+        private static string HandshakeOnce(string exe, string poisonRoot, out string error)
+        {
+            error = null;
+            try
+            {
+                var psi = new ProcessStartInfo(exe)
+                {
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                if (poisonRoot != null)
+                {
+                    psi.EnvironmentVariables["DOTNET_ROOT"] = poisonRoot;
+                    psi.EnvironmentVariables["DOTNET_ROOT_X64"] = poisonRoot;
+                }
+                using var p = Process.Start(psi);
+                p.StandardInput.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"," +
+                    "\"params\":{\"protocolVersion\":\"2025-03-26\",\"clientInfo\":{\"name\":\"autocommand-preflight\",\"version\":\"0\"}}}");
+                p.StandardInput.Flush();
+
+                // read lines until a response (a result or an error) shows up;
+                // notifications carry no "id" and are skipped
+                var deadline = Task.Delay(TimeSpan.FromSeconds(10));
+                while (!deadline.IsCompleted)
+                {
+                    var lineTask = p.StandardOutput.ReadLineAsync();
+                    if (Task.WhenAny(lineTask, Task.Delay(1000)).Result != lineTask) continue;
+                    string line = lineTask.Result;
+                    if (line == null) break;
+                    if (line.Contains("\"result\"") || line.Contains("\"error\"")) return line;
+                }
+                try { p.Kill(); } catch { }
+                error = "no JSON-RPC response within 10s (exit code " + (p.HasExited ? p.ExitCode.ToString() : "none") + ")";
+                return null;
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
         }
     }
 }

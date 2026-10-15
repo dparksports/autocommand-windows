@@ -70,6 +70,14 @@ if (-not $DryRun) {
     $newText = $csprojText -replace "(?m)^(\s*<Version>)[\d.]+(</Version>\s*)$", "`${1}$Version`${2}"
     if ($newText -eq $csprojText) { Die 'failed to rewrite <Version> in AutoCommand.csproj' }
     [System.IO.File]::WriteAllText($csproj, $newText)
+
+    # The proxy's csproj follows the app's version (serverInfo / deps.json
+    # must never disagree with the release they shipped in).
+    $proxyCsproj = Join-Path $PSScriptRoot 'AgentProxy\AutoCommand.AgentProxy.csproj'
+    $proxyText = [System.IO.File]::ReadAllText($proxyCsproj)
+    $newProxyText = $proxyText -replace "(?m)^(\s*<Version>)[\d.]+(</Version>\s*)$", "`${1}$Version`${2}"
+    if ($newProxyText -eq $proxyText) { Die 'failed to rewrite <Version> in AgentProxy\AutoCommand.AgentProxy.csproj' }
+    [System.IO.File]::WriteAllText($proxyCsproj, $newProxyText)
 }
 
 $relVersion = if ($DryRun) { $currentVersion } else { $Version }
@@ -83,13 +91,31 @@ Step "Publishing self-contained win-x64 build (v$relVersion)"
 dotnet publish AutoCommand.csproj -c Release -r win-x64 --self-contained true -o "publish/v$relVersion"
 Assert-Exit 'dotnet publish'
 
-# -- Verify the binary carries the csproj version - the whole point -----------
+# The AgentProxy MCP clients spawn: self-contained SINGLE FILE, so no
+# framework lookup happens at spawn time. Desktop MCP clients are known to
+# export their own DOTNET_ROOT (often an older .NET) for everything they
+# spawn - a framework-dependent proxy dies in the apphost before any managed
+# code runs ("You must install .NET to run this application"). The app's
+# Register action copies this from the zip's tools\AgentProxy into
+# %LOCALAPPDATA%\AutoCommand\tools\v<version>\ and points client configs at
+# that stable path.
+Step "Publishing self-contained single-file AgentProxy (tools)"
+dotnet publish AgentProxy\AutoCommand.AgentProxy.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:PublishTrimmed=true -o "publish/v$relVersion/tools/AgentProxy"
+Assert-Exit 'dotnet publish proxy'
+
+# -- Verify the binaries carry the csproj version - the whole point -----------
 $exe = "publish/v$relVersion/AutoCommand.exe"
 $binaryVersion = (Get-Item $exe).VersionInfo.ProductVersion
 if ($binaryVersion -ne $relVersion) {
     Die "published exe reports ProductVersion '$binaryVersion' but expected '$relVersion' - the version pipeline is broken"
 }
 Step "Verified exe ProductVersion: $binaryVersion"
+$proxyExe = "publish/v$relVersion/tools/AgentProxy/AutoCommand.AgentProxy.exe"
+$proxyVersion = (Get-Item $proxyExe).VersionInfo.ProductVersion
+if ($proxyVersion -ne $relVersion) {
+    Die "published proxy reports ProductVersion '$proxyVersion' but expected '$relVersion' - the version pipeline is broken"
+}
+Step "Verified proxy ProductVersion: $proxyVersion"
 
 # -- Package ------------------------------------------------------------------
 Step "Zipping release assets"
@@ -124,7 +150,7 @@ if (-not $Yes) {
 
 # -- Commit, tag, push, release -----------------------------------------------
 Step "Committing and tagging v$Version"
-git add AutoCommand.csproj "release_notes_v$Version.md"
+git add AutoCommand.csproj AgentProxy\AutoCommand.AgentProxy.csproj "release_notes_v$Version.md"
 git commit -m "release: v$Version"
 Assert-Exit 'git commit'
 git tag "v$Version"

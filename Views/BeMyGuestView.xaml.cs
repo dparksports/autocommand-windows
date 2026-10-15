@@ -142,24 +142,39 @@ namespace AutoCommand.Views
         {
             if (sender is not Button { Tag: McpClientRegistration client }) return;
 
-            string proxy = McpClientCatalog.ResolveAndInstallProxy();
+            var (proxy, installNote) = McpClientCatalog.ResolveAndInstallProxy();
             if (proxy == null)
             {
                 MessageBox.Show(
                     "AutoCommand.AgentProxy.exe was not found next to the app.\n" +
-                    "Reinstall AutoCommand (or rebuild from source) and try again.",
+                    "Reinstall AutoCommand (or rebuild from source) and try again.\n\n" + installNote,
+                    "Be My Guest", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // never point a client config at a proxy that cannot start: prove
+            // it answers an MCP handshake here first, including under the
+            // hostile DOTNET_ROOT that desktop MCP clients are known to export
+            var (preOk, preMsg) = McpClientCatalog.PreflightProxy(proxy);
+            if (!preOk)
+            {
+                MessageBox.Show(
+                    "The proxy is installed but failed its startup preflight — it was NOT registered:\n\n" +
+                    preMsg + "\n\n" + installNote,
                     "Be My Guest", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
             var (ok, message) = McpClientCatalog.Register(client, proxy);
+            if (ok) message += "\n\nPreflight passed: the installed proxy answered an MCP handshake, " +
+                               "including with a hostile DOTNET_ROOT.";
             MessageBox.Show(message, ok ? "Registered" : "AI access",
                 MessageBoxButton.OK, ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
 
         private void CopyAgentConfigBtn_Click(object sender, RoutedEventArgs e)
         {
-            string proxy = McpClientCatalog.ResolveAndInstallProxy()
+            string proxy = McpClientCatalog.ResolveAndInstallProxy().ProxyPath
                 ?? "%LOCALAPPDATA%\\AutoCommand\\tools\\AutoCommand.AgentProxy.exe";
             string config =
                 "{\n  \"mcp\": {\n    \"servers\": {\n      \"autocommand\": {\n" +

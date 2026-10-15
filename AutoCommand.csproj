@@ -72,6 +72,9 @@
     <Compile Remove="PyTraceSelfTest\**" />
     <Compile Remove="TaskAttributionSelfTest\**" />
     <Compile Remove="OneSettingsCadenceSelfTest\**" />
+    <!-- Proxy install self-test: drives McpClientRegistration's install
+         decision logic with synthetic dirs (see ProxyInstallSelfTest\) -->
+    <Compile Remove="ProxyInstallSelfTest\**" />
     <!-- Vendored engine: compiled through its own ProjectReference — without
          this exclusion the default glob would pull its .cs into the app
          assembly too (duplicate types, and the CLI's top-level Program). -->

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Offline self-test for the AgentProxy install logic. Compiles
+       Services\McpClientRegistration.cs directly (the WPF-free part), so
+       what runs here is byte-identical to what ships in AutoCommand.
+       Excluded from the app build (AutoCommand.csproj Compile Remove, like
+       PyTraceSelfTest): it has its own Main(). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ProxyInstallSelfTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Services\McpClientRegistration.cs" />
+  </ItemGroup>
+
+</Project>
