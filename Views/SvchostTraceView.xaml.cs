@@ -612,11 +612,12 @@ namespace AutoCommand.Views
                 // auto-installed layout
                 Path.Combine(ToolsDir, "SvchostAnalyzer.exe"),
             };
-            // dev layout: walk up from autocommand1004\bin\... to the repo root
+            // dev layout: the vendored engine source lives in the repo at
+            // svchost-watch\ — walk up from bin\Debug\... to the repo root
             var dir = AppContext.BaseDirectory;
             for (int i = 0; i < 6 && dir != null; i++, dir = Path.GetDirectoryName(dir))
                 candidates.Add(Path.Combine(dir!, "svchost-watch", "SvchostAnalyzer",
-                                            "bin", "Debug", "net10.0", "SvchostAnalyzer.exe"));
+                                            "bin", "Debug", "net10.0-windows", "SvchostAnalyzer.exe"));
             return candidates.FirstOrDefault(File.Exists);
         }
 

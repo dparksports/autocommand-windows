@@ -26,9 +26,11 @@
     <ProjectReference Include="Sdk\AutoCommand.Sdk.csproj" />
     <!-- The svchost capture/analysis engine, linked in-process: the app runs
          it directly instead of spawning a bundled child exe (which SmartScreen
-         hard-blocks on download extracts). The standalone CLI exe remains a
-         separate release asset for headless/boot-autostart use. -->
-    <ProjectReference Include="..\svchost-watch\SvchostAnalyzer.Core\SvchostAnalyzer.Core.csproj" />
+         hard-blocks on download extracts). Vendored in-repo at svchost-watch\
+         (formerly a sibling repository, dparksports/svchost-watch — archived).
+         The standalone CLI exe is not built or shipped; already-installed
+         boot-autostart copies keep working. -->
+    <ProjectReference Include="svchost-watch\SvchostAnalyzer.Core\SvchostAnalyzer.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,6 +60,10 @@
          Main() (same reason as ScratchTest) -->
     <Compile Remove="PyTraceSelfTest\**" />
     <Compile Remove="TaskAttributionSelfTest\**" />
+    <!-- Vendored engine: compiled through its own ProjectReference — without
+         this exclusion the default glob would pull its .cs into the app
+         assembly too (duplicate types, and the CLI's top-level Program). -->
+    <Compile Remove="svchost-watch\**" />
   </ItemGroup>
 
   <!-- Filter out Linux .so native binaries when publishing for Windows win-x64 -->
