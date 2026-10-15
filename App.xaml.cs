@@ -9,6 +9,20 @@ namespace AutoCommand
         {
             base.OnStartup(e);
 
+            // ── headless agent mode (no UI, no dialogs, no theme) ────────
+            // --agent-headless [sec]
+            //      start an AI session without the UI (scripts/tests).
+            //      NOTE: the exe carries requireAdministrator, so MCP clients
+            //      must NEVER spawn it — they spawn the small asInvoker
+            //      proxy (AutoCommand.AgentProxy, ProjectReferenced and
+            //      deployed next to this exe) which forwards here.
+            var args = e.Args ?? System.Array.Empty<string>();
+            if (args.Any(a => string.Equals(a, "--agent-headless", System.StringComparison.OrdinalIgnoreCase)))
+            {
+                RunAgentHeadless(args);
+                return;
+            }
+
             // ── headless OneSettings watchdog path (no UI) ──────────────
             // The \AutoCommand\OneSettingsCadenceWatchdog SYSTEM task (installed
             // from the OneSettings tab with the watchdog box checked) launches
@@ -16,7 +30,7 @@ namespace AutoCommand
             // re-apply the saved RefreshCache cadence if Windows servicing
             // reverted it. Silent; every action lands in the machine-readable
             // audit trail under %ProgramData%\AutoCommand\onesettings-cadence.
-            if (e.Args != null && e.Args.Any(a => string.Equals(a, "onesettings-enforce", System.StringComparison.OrdinalIgnoreCase)))
+            if (args.Any(a => string.Equals(a, "onesettings-enforce", System.StringComparison.OrdinalIgnoreCase)))
             {
                 RunOneSettingsEnforce();
                 return;
@@ -65,17 +79,17 @@ namespace AutoCommand
             _ = Services.TelemetryProofService.Instance.TotalDenied;
         }
 
-        // Older builds stored a Google Analytics consent flag and a client-id
-        // GUID under HKCU\Software\AutoCommand. Usage telemetry was removed;
-        // delete the leftovers so no orphaned tracking id survives.
-        // Idempotent — no-op once clean.
+        // Headless AI session: same bridge the Settings card starts, minus the
+        // UI. Runs until the given number of seconds elapse (0 = until this
+        // console's stdin closes or the process is killed). Mutating tools are
+        // always off here — nothing can confirm an action without the app UI.
         private void RunOneSettingsEnforce()
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             try
             {
                 // Engine handles the no-saved-state case as a no-op (normal
-                // after a restore), and audits both success and failure - a
+                // after a restore), and audits both success and failure — a
                 // failed watchdog run must never block app shutdown.
                 new OneSettingsCadence.CadenceEngine().Enforce();
             }
@@ -83,6 +97,42 @@ namespace AutoCommand
             Shutdown();
         }
 
+        private void RunAgentHeadless(string[] args)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+            int seconds = 0;
+            int flagIndex = System.Array.FindIndex(args,
+                a => string.Equals(a, "--agent-headless", System.StringComparison.OrdinalIgnoreCase));
+            if (flagIndex + 1 < args.Length && int.TryParse(args[flagIndex + 1], out int parsed) && parsed > 0)
+                seconds = parsed;
+
+            var (ok, message) = Services.AgentBridgeService.Instance.Start(allowMutating: false);
+            System.Console.WriteLine(ok
+                ? $"AutoCommand agent session active ({message}) — Ctrl+C or close stdin to stop."
+                : "agent session failed: " + message);
+
+            if (ok)
+            {
+                if (seconds > 0) System.Threading.Thread.Sleep(TimeSpan.FromSeconds(seconds));
+                else while (System.Console.In.ReadLine() != null) { } // until stdin closes
+                Services.AgentBridgeService.Instance.Stop();
+            }
+            Shutdown();
+        }
+
+        protected override void OnExit(ExitEventArgs e)
+        {
+            // a live session must never outlive the app: the session file is
+            // what grants access, so it dies here even on a crash-next-launch
+            Services.AgentBridgeService.Instance.Stop();
+            base.OnExit(e);
+        }
+
+        // Older builds stored a Google Analytics consent flag and a client-id
+        // GUID under HKCU\Software\AutoCommand. Usage telemetry was removed;
+        // delete the leftovers so no orphaned tracking id survives.
+        // Idempotent — no-op once clean.
         private void RemoveLegacyAnalyticsRegistryValues()
         {
             try
