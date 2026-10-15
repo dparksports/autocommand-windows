@@ -76,6 +76,8 @@ compliance bucketing — including the exact-match event namespace a typo once
 silently broke) has an offline self-test: `OneSettingsCadenceSelfTest`
 (43 checks, no COM, no writes, no elevation).
 
+| Live external starts | While the tab is open, an `EventLogWatcher` over the scheduler channel flags launches that fired with no trigger event (100 without 107/108/119 — something called `Run()`), confirmed on a 3 s deadline so out-of-order trigger events do not false-alarm; EID 129 supplies the taskhostw PID, Sysmon EID 3/5 join the fetch destinations and exit (pure correlator unit-covered; degrades to starts-without-evidence when Sysmon is absent) |
+
 What the tab cannot enforce, honestly stated in the card itself: the watchdog
 re-asserts the task *definition*; launches started by other actors (`Run()` on
 the task) are counted and named but not preventable, and a component that

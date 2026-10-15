@@ -24,15 +24,66 @@ namespace AutoCommand.Views
         private CadenceEngine.LiveState _live;
         private CadenceEngine.DesiredState _saved;
         private TimeSpan? _pendingInterval;   // selected in the combo/custom box
+        private ExternalStartMonitor _liveWatch;
 
         public OneSettingsView()
         {
             InitializeComponent();
         }
 
-        private void UserControl_Loaded(object sender, RoutedEventArgs e) => _ = RefreshAllAsync();
+        private void UserControl_Loaded(object sender, RoutedEventArgs e)
+        {
+            _ = RefreshAllAsync();
+            StartLiveWatch();
+        }
+
+        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => StopLiveWatch();
 
         private void RefreshBtn_Click(object sender, RoutedEventArgs e) => _ = RefreshAllAsync();
+
+        // ── live external-start watch ───────────────────────────────────────
+
+        private void StartLiveWatch()
+        {
+            StopLiveWatch();
+            _liveWatch = new ExternalStartMonitor();
+            _liveWatch.ExternalStart += inst => Dispatcher.Invoke(() =>
+            {
+                RenderExternalStarts();
+                WatchStatusText.Text = $"external start at {DateTime.Now:HH:mm:ss} — see feed below";
+            });
+            _liveWatch.Changed += () => Dispatcher.Invoke(RenderExternalStarts);
+            _liveWatch.Start();
+
+            WatchDot.Fill = FindResource(_liveWatch.SchedulerChannelOk ? "AccentGreenBrush" : "AccentRedBrush") as Brush;
+            WatchStatusText.Text = !_liveWatch.SchedulerChannelOk
+                ? "cannot read the Task Scheduler history channel — live watch unavailable"
+                : _liveWatch.SysmonAvailable
+                    ? "watching — launches that fire with no trigger are flagged here within seconds"
+                    : "watching — Sysmon is not installed, so starts are flagged but fetch destinations are not (Sysmon Audit tab installs it)";
+        }
+
+        private void StopLiveWatch()
+        {
+            _liveWatch?.Dispose();
+            _liveWatch = null;
+        }
+
+        private void RenderExternalStarts()
+        {
+            if (_liveWatch == null) return;
+            ExternalStartsList.Items.Clear();
+            foreach (var inst in _liveWatch.Correlator.Snapshot().Where(i => i.ConfirmedExternal))
+            {
+                var destinations = inst.Fetches.Select(f => f.Destination).Distinct().ToList();
+                string fetches = destinations.Count == 0
+                    ? "no connections recorded"
+                    : string.Join(", ", destinations.Take(4)) + (destinations.Count > 4 ? ", …" : "");
+                ExternalStartsList.Items.Add(
+                    $"{inst.StartedUtc.ToLocalTime():HH:mm:ss}  external start · taskhostw pid {(inst.Pid > 0 ? inst.Pid.ToString() : "?")} · {fetches}" +
+                    (inst.ExitedUtc is { } done ? $" · exited {done.ToLocalTime():HH:mm:ss}" : " · running…"));
+            }
+        }
 
         // ── refresh ─────────────────────────────────────────────────────────
 
