@@ -193,7 +193,7 @@ namespace AutoCommand.Views
         /// </summary>
         private void TryEnrichRow(SpawnItem item)
         {
-            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            var info = _taskAttribution.GetTaskFor(item);
             if (info == null) return;
 
             if (string.IsNullOrEmpty(item.Badge) && !string.IsNullOrEmpty(info.TaskPath))
@@ -280,7 +280,7 @@ namespace AutoCommand.Views
                 {
                     // Each record merges the row with its attribution — the
                     // investigation travels with the export, not just the grid.
-                    var info = _taskAttribution.GetTaskForPid(row.Pid);
+                    var info = _taskAttribution.GetTaskFor(row);
                     var record = new
                     {
                         row.TimeUtc,
@@ -341,7 +341,7 @@ namespace AutoCommand.Views
         {
             if (SpawnGrid.SelectedItem is not SpawnItem item) return;
 
-            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            var info = _taskAttribution.GetTaskFor(item);
             var known = KnownTaskCatalog.Lookup(info?.TaskPath);
             var sb = new StringBuilder();
             sb.AppendLine($"# taskhostw investigation — PID {item.Pid}");
@@ -387,7 +387,8 @@ namespace AutoCommand.Views
         {
             if (SpawnGrid.SelectedItem is not SpawnItem item || item.Pid <= 0) return;
             var win = new ProcessTraceWindow(item.Pid, "taskhostw", item.Image,
-                _taskAttribution.GetTaskForPid(item.Pid))
+                _taskAttribution.GetTaskFor(item),
+                item.TimeUtc, item.TimeUtc)
             {
                 Owner = Window.GetWindow(this)
             };
@@ -483,7 +484,7 @@ namespace AutoCommand.Views
 
         private void RenderTaskPane(SpawnItem item)
         {
-            var info = item == null ? null : _taskAttribution.GetTaskForPid(item.Pid);
+            var info = _taskAttribution.GetTaskFor(item);
             TaskPathText.Text = info?.TaskPath is string path && path.Length > 0 ? path : "—";
             TaskUserText.Text = !string.IsNullOrEmpty(info?.UserContext) ? info.UserContext : "—";
             TaskTriggerText.Text = !string.IsNullOrEmpty(info?.TriggerReason) ? info.TriggerReason : "—";
@@ -542,7 +543,7 @@ namespace AutoCommand.Views
 
         private async System.Threading.Tasks.Task LoadTaskSummaryAsync(SpawnItem item)
         {
-            var info = _taskAttribution.GetTaskForPid(item.Pid);
+            var info = _taskAttribution.GetTaskFor(item);
             if (info == null || string.IsNullOrEmpty(info.TaskPath)) return;
 
             var (summary, error) = await TaskSchedulerService.Instance.GetTaskSummaryAsync(info.TaskPath);

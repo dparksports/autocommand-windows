@@ -248,6 +248,7 @@ namespace AutoCommand.Services
                 {
                     TimeUtc = ParseUtcTime(GetValue(fields, "UtcTime"), record.TimeCreated),
                     Pid = pid,
+                    ProcessGuid = GetValue(fields, "ProcessGuid")?.Trim('{', '}'),
                     Image = GetValue(fields, "Image"),
                     CommandLine = GetValue(fields, "CommandLine"),
                     ParentPid = ParsePid(GetValue(fields, "ParentProcessId")),

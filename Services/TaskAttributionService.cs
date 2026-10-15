@@ -24,6 +24,7 @@ namespace AutoCommand.Services
         public string TaskPath;       // e.g. "\Microsoft\Windows\Foo\Bar"
         public string UserContext;    // account the task ran as
         public int ProcessId;         // taskhostw PID (from Sysmon EID 1 or scheduler EID 129)
+        public string ProcessGuid;    // Sysmon's per-boot unique process identity (braces stripped)
         public string CommandLine;
         public DateTime? StartedAt;   // scheduler EID 100 (or 129 launch time)
         public DateTime? CompletedAt; // scheduler EID 102
@@ -91,6 +92,7 @@ namespace AutoCommand.Services
         private static readonly Regex MessageReturnCodeRegex = new Regex(@"return code (-?\d+)", RegexOptions.Compiled);
 
         private EventLogWatcher _sysmonProcessWatcher;   // Sysmon EID1 — taskhostw spawns
+        private EventLogWatcher _sysmonExitWatcher;      // Sysmon EID5 — dead pids get evicted
         private EventLogWatcher _taskInstanceWatcher;    // Task Scheduler launch narrative
 
         // Both maps hold the same objects once a launch is fully stitched
@@ -99,6 +101,12 @@ namespace AutoCommand.Services
         // for pids whose rows are long gone from the views anyway.
         private readonly ConcurrentDictionary<int, TaskLaunchInfo> _byPid = new();
         private readonly ConcurrentDictionary<string, TaskLaunchInfo> _byGuid = new(StringComparer.OrdinalIgnoreCase);
+
+        // Sysmon's ProcessGuid (kernel-assigned, unique for the whole boot)
+        // → launch. A DIFFERENT guid namespace from _byGuid's scheduler
+        // instance GUIDs; this is the one key PID recycling can never
+        // collide on, and its entries are evicted by Sysmon EID 5.
+        private readonly ConcurrentDictionary<string, TaskLaunchInfo> _byProcGuid = new(StringComparer.OrdinalIgnoreCase);
         private const int TrackedCap = 20000;
         private const double StitchWindowSeconds = 30;
 
@@ -133,6 +141,18 @@ namespace AutoCommand.Services
 
             try
             {
+                var query = new EventLogQuery(SysmonLog, PathType.LogName, "*[System[(EventID=5)]]");
+                _sysmonExitWatcher = new EventLogWatcher(query);
+                _sysmonExitWatcher.EventRecordWritten += Sysmon_ProcessStopped;
+                _sysmonExitWatcher.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke($"Failed to watch Sysmon exit events: {ex.Message}");
+            }
+
+            try
+            {
                 var query = new EventLogQuery(TaskSchedulerLog, PathType.LogName, SchedulerXPath);
                 _taskInstanceWatcher = new EventLogWatcher(query);
                 _taskInstanceWatcher.EventRecordWritten += TaskScheduler_InstanceRecorded;
@@ -152,6 +172,12 @@ namespace AutoCommand.Services
                 _sysmonProcessWatcher.Dispose();
                 _sysmonProcessWatcher = null;
             }
+            if (_sysmonExitWatcher != null)
+            {
+                _sysmonExitWatcher.Enabled = false;
+                _sysmonExitWatcher.Dispose();
+                _sysmonExitWatcher = null;
+            }
             if (_taskInstanceWatcher != null)
             {
                 _taskInstanceWatcher.Enabled = false;
@@ -163,6 +189,37 @@ namespace AutoCommand.Services
         /// <summary>Attribution for a taskhostw PID, or null when unknown/not a task host.</summary>
         public TaskLaunchInfo GetTaskForPid(int pid) =>
             _byPid.TryGetValue(pid, out var info) ? info : null;
+
+        /// <summary>
+        /// Attribution for a taskhostw PID, checked against the asking
+        /// process's own start time. Attribution is a fact about ONE tenant
+        /// of a PID; once Windows recycles the number onto an unrelated
+        /// process, handing that task over would blame an innocent process.
+        /// Returns null when the start times don't line up (±5s) or nothing
+        /// is known for the PID.
+        /// </summary>
+        public TaskLaunchInfo GetTaskForPid(int pid, DateTime? subjectStartedUtc)
+        {
+            if (!_byPid.TryGetValue(pid, out var info)) return null;
+            if (subjectStartedUtc.HasValue && info.StartedAt.HasValue &&
+                (subjectStartedUtc.Value.ToUniversalTime() - info.StartedAt.Value).Duration() > TimeSpan.FromSeconds(5))
+                return null;   // attribution belongs to an earlier tenant of this PID
+            return info;
+        }
+
+        /// <summary>
+        /// Attribution for a spawn row: the Sysmon ProcessGuid first — the one
+        /// key immune to PID recycling, no time heuristic needed — falling
+        /// back to the time-guarded pid lookup when the guid is unavailable.
+        /// </summary>
+        public TaskLaunchInfo GetTaskFor(SpawnItem item)
+        {
+            if (item == null) return null;
+            if (!string.IsNullOrEmpty(item.ProcessGuid) &&
+                _byProcGuid.TryGetValue(item.ProcessGuid, out var byGuid))
+                return byGuid;
+            return GetTaskForPid(item.Pid, item.TimeUtc);
+        }
 
         /// <summary>
         /// Replay the recent past so a freshly opened tab shows spawns that
@@ -203,6 +260,11 @@ namespace AutoCommand.Services
             spawns.Sort((a, b) => a.TimeUtc.CompareTo(b.TimeUtc));
             foreach (var item in spawns)
                 FeedSysmonItem(item);
+
+            // Exits inside the window evict their pid mappings too — a
+            // backfilled launch that already exited must not stay
+            // attributable through its (possibly since-recycled) pid.
+            ReplayExits(cutoff);
             return spawns;
         }
 
@@ -373,6 +435,11 @@ namespace AutoCommand.Services
                                               .Take(Math.Max(1, _byGuid.Count / 10))
                                               .Select(kv => kv.Key).ToList())
                     _byGuid.TryRemove(key, out _);
+            if (_byProcGuid.Count >= TrackedCap)
+                foreach (string key in _byProcGuid.OrderBy(kv => kv.Value.FirstSeenUtc)
+                                                  .Take(Math.Max(1, _byProcGuid.Count / 10))
+                                                  .Select(kv => kv.Key).ToList())
+                    _byProcGuid.TryRemove(key, out _);
         }
 
         // ── live event handling ───────────────────────────────────────────
@@ -391,14 +458,99 @@ namespace AutoCommand.Services
             catch { }
         }
 
+        private void Sysmon_ProcessStopped(object sender, EventRecordWrittenEventArgs e)
+        {
+            try
+            {
+                if (e.EventRecord == null) return;
+                HandleProcessStopped(ParseFields(e.EventRecord.ToXml()));
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// A tracked taskhostw exited (Sysmon EID 5): drop its PID-keyed
+        /// attribution so the number cannot hand this task to whatever
+        /// process inherits it next. The scheduler-GUID and ProcessGuid maps
+        /// keep their entries — those keys are unique and rows already
+        /// holding the object keep enriching until the last completion
+        /// events land. Eviction happens in the live watcher and in the
+        /// backfill replay, so even a freshly opened tab never attributes
+        /// through an exited pid.
+        /// </summary>
+        private void HandleProcessStopped(Dictionary<string, string> fields)
+        {
+            if (fields == null) return;
+            string key = (Get(fields, "ProcessGuid") ?? string.Empty).Trim('{', '}');
+            if (key.Length == 0) return;
+
+            if (!_byProcGuid.TryRemove(key, out var info)) return;
+
+            if (Get(fields, "UtcTime") is string raw &&
+                DateTime.TryParse(raw, null,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out DateTime exited))
+                info.CompletedAt ??= exited;
+
+            // Only evict the pid mapping while it still points at THIS
+            // tenant — if the number was already recycled onto a newer
+            // launch, that launch owns the mapping now.
+            if (info.ProcessId > 0 && _byPid.TryGetValue(info.ProcessId, out var current) &&
+                ReferenceEquals(current, info))
+                _byPid.TryRemove(info.ProcessId, out _);
+        }
+
+        /// <summary>Backfill half of EID 5: evicts pid mappings for launches that exited within the replayed window.</summary>
+        private void ReplayExits(DateTime cutoff)
+        {
+            try
+            {
+                var query = new EventLogQuery(SysmonLog, PathType.LogName, "*[System[(EventID=5)]]");
+                using var reader = new EventLogReader(query);
+                EventRecord rec; int guard = 20000;
+                while ((rec = reader.ReadEvent()) != null && guard-- > 0)
+                {
+                    using (rec)
+                    {
+                        if (_byProcGuid.IsEmpty) break;   // nothing tracked left to evict
+                        if (!(rec.TimeCreated is DateTime t) || t.ToUniversalTime() < cutoff) continue;
+                        HandleProcessStopped(ParseFields(rec.ToXml()));
+                    }
+                }
+            }
+            catch { /* exit replay is a bonus — scheduler events still bound CompletedAt */ }
+        }
+
         /// <summary>Sysmon-side half of a launch: registers/updates the pid entry and links the command-line GUID when present.</summary>
         private void FeedSysmonItem(SpawnItem item)
         {
             var info = ForPid(item.Pid);
             info.CommandLine ??= item.CommandLine;
+            // The spawn time binds this attribution to THIS tenant of the
+            // PID — GetTaskForPid's time guard depends on it once the
+            // number gets recycled onto a later process.
+            info.StartedAt ??= item.TimeUtc;
+            if (!string.IsNullOrEmpty(item.ProcessGuid)) LinkProcGuid(info, item.ProcessGuid);
 
             var guidMatch = InstanceGuidRegex.Match(item.CommandLine ?? string.Empty);
             if (guidMatch.Success) LinkGuid(info, guidMatch.Groups[1].Value);
+        }
+
+        /// <summary>
+        /// Registers the Sysmon ProcessGuid side of a launch. Live watching
+        /// and Backfill can discover the same launch twice; both fold onto
+        /// the canonical object and the pid map is re-pointed at it.
+        /// </summary>
+        private void LinkProcGuid(TaskLaunchInfo info, string procGuid)
+        {
+            info.ProcessGuid ??= procGuid.Trim('{', '}');
+            var canonical = _byProcGuid.GetOrAdd(info.ProcessGuid, info);
+            if (ReferenceEquals(canonical, info)) return;
+
+            canonical.ProcessId = info.ProcessId;
+            canonical.CommandLine ??= info.CommandLine;
+            canonical.StartedAt ??= info.StartedAt;
+            if (info.ProcessId > 0) _byPid[info.ProcessId] = canonical;
         }
 
         private void TaskScheduler_InstanceRecorded(object sender, EventRecordWrittenEventArgs e)

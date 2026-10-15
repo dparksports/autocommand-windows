@@ -44,6 +44,11 @@ namespace AutoCommand.Views
 
         // pid -> services hosted
         private readonly Dictionary<int, string> _svcByPid = new();
+        // pid -> parsed -k/-s identity (visible cmdline only; SYSTEM lines are
+        // unreadable non-elevated — recorded as hidden, never guessed)
+        private readonly Dictionary<int, IdentityInfo> _identByPid = new();
+        // sticky identity flags — survive their PID's exit, printed by Analyze()
+        private readonly List<(int Pid, string Text)> _identityFlags = new();
         // "pid|ip:port" -> connected-at
         private readonly Dictionary<string, DateTime> _connOpen = new();
         // every connect event, for pattern analysis
@@ -109,6 +114,7 @@ namespace AutoCommand.Views
         {
             _rows.Clear(); _jsonEvents.Clear(); _connEvents.Clear();
             _svcByPid.Clear(); _connOpen.Clear(); _bytes.Clear();
+            _identByPid.Clear(); _identityFlags.Clear();
             _ticks = 0; _flags = 0;
             EventsChip.Text = "events: 0"; FlagsChip.Text = "flags: 0";
         }
@@ -133,6 +139,7 @@ namespace AutoCommand.Views
                 string services = svcMap.TryGetValue(p.Pid, out var s) ? s : "<pending>";
                 string parent = nameMap.TryGetValue(p.Ppid, out var pn) ? pn : "<exited>";
                 _svcByPid[p.Pid] = services;
+                var id = RecordIdentity(p.Pid, p.Cmd, services, parent, now);
                 if (parent != "services.exe")
                 {
                     AddRow(new TraceRow(now, "FLAG", p.Pid, services, parent, "",
@@ -140,10 +147,12 @@ namespace AutoCommand.Views
                     _flags++;
                 }
                 AddRow(new TraceRow(now, "baseline", p.Pid, services, parent, "",
-                    $"created {p.Created}" + (string.IsNullOrEmpty(p.Cmd) ? "" : $" · {p.Cmd}")));
-                _jsonEvents.Add(Json(new Dictionary<string, object> {
+                    $"created {p.Created}{id.DetailSuffix}"));
+                var evt = new Dictionary<string, object> {
                     ["type"]="baseline", ["pid"]=p.Pid, ["services"]=services,
-                    ["ppid"]=p.Ppid, ["parent"]=parent, ["created"]=p.Created, ["cmd"]=p.Cmd ?? "" }));
+                    ["ppid"]=p.Ppid, ["parent"]=parent, ["created"]=p.Created, ["cmd"]=p.Cmd ?? "" };
+                foreach (var kv in id.JsonFields) evt[kv.Key] = kv.Value;
+                _jsonEvents.Add(Json(evt));
             }
 
             foreach (var line in NetstatLines())
@@ -188,6 +197,7 @@ namespace AutoCommand.Views
                 _jsonEvents.Add(Json(new Dictionary<string, object> {
                     ["type"]="exit", ["pid"]=pid, ["services"]=_svcByPid[pid] }));
                 _svcByPid.Remove(pid);
+                _identByPid.Remove(pid);
             }
 
             // connections (established, non-loopback, svchost-owned)
@@ -249,7 +259,7 @@ namespace AutoCommand.Views
 
             bool badParent = parent != "services.exe";
             bool noSvc = services == "<no service>";
-            string detail = $"created {p.Created}" + (string.IsNullOrEmpty(p.Cmd) ? "" : $" · {p.Cmd}");
+            var id = RecordIdentity(p.Pid, p.Cmd, services, parent, now);
 
             if (badParent || noSvc)
             {
@@ -258,10 +268,82 @@ namespace AutoCommand.Views
                 _flags++;
                 FlagsChip.Text = $"flags: {_flags}";
             }
-            AddRow(new TraceRow(now, type, p.Pid, services, parent, "", detail));
-            _jsonEvents.Add(Json(new Dictionary<string, object> {
+            AddRow(new TraceRow(now, type, p.Pid, services, parent, "",
+                $"created {p.Created}{id.DetailSuffix}"));
+            var evt = new Dictionary<string, object> {
                 ["type"]=type, ["pid"]=p.Pid, ["services"]=services,
-                ["ppid"]=p.Ppid, ["parent"]=parent, ["created"]=p.Created, ["cmd"]=p.Cmd ?? "" }));
+                ["ppid"]=p.Ppid, ["parent"]=parent, ["created"]=p.Created, ["cmd"]=p.Cmd ?? "" };
+            foreach (var kv in id.JsonFields) evt[kv.Key] = kv.Value;
+            _jsonEvents.Add(Json(evt));
+        }
+
+        /// <summary>
+        /// Parses the instance's -k/-s identity and records it. Masquerade
+        /// signals raise FLAG rows immediately (counted once here, merely
+        /// reprinted by Analyze()): a -s claim that contradicts the
+        /// SCM-resident services, and a readable command line without -k —
+        /// hidden command lines (non-elevated WMI cannot read SYSTEM
+        /// processes) are the normal case and are labeled, not flagged.
+        /// </summary>
+        private IdentityInfo RecordIdentity(int pid, string cmd, string services, string parent, DateTime now)
+        {
+            var id = IdentityInfo.Parse(cmd, services);
+            _identByPid[pid] = id;
+            // one identity flag per instance — the strongest signal wins
+            // (a mismatch already implies the line is not genuine)
+            if (id.Mismatch)
+            {
+                string text = $"-s '{id.S}' but SCM hosts '{services}' — identity mismatch (masquerade signal)";
+                AddRow(new TraceRow(now, "FLAG", pid, services, parent, "", text));
+                _identityFlags.Add((pid, text));
+                _flags++;
+            }
+            else if (id.NoK)
+            {
+                string text = $"readable command line without -k service group — not an SCM-launched service host";
+                AddRow(new TraceRow(now, "FLAG", pid, services, parent, "", text));
+                _identityFlags.Add((pid, text));
+                _flags++;
+            }
+            return id;
+        }
+
+        /// <summary>
+        /// One instance's command-line identity: -k group and -s service with
+        /// the corroboration verdict against the SCM ground truth, plus the
+        /// ready-made suffix and JSONL fields derived from it.
+        /// </summary>
+        private readonly record struct IdentityInfo(string K, string S, bool Visible, bool Mismatch, bool NoK)
+        {
+            public static IdentityInfo Parse(string cmd, string services)
+            {
+                var id = SvchostIdentity.Parse(cmd);
+                bool visible = !string.IsNullOrEmpty(cmd);
+                // "<pending>"/"<no service>" placeholders are not SCM data
+                bool corroborable = !string.IsNullOrEmpty(services) && !services.StartsWith('<');
+                return new IdentityInfo(id.Group, id.DeclaredService, visible,
+                    corroborable && SvchostIdentity.Mismatches(id.DeclaredService, services),
+                    visible && id.Group == null);
+            }
+
+            /// <summary>Suffix for the row's Detail column (" · netsvcs · -s WpnService" / " · cmdline hidden").</summary>
+            public string DetailSuffix => Visible
+                ? " · " + (K ?? "no -k ⚠") + (S != null ? $" · -s {S}" : "")
+                : " · cmdline hidden";
+
+            /// <summary>Extra JSONL fields (same schema as the CaptureEngine's k/s/mismatch/noK).</summary>
+            public Dictionary<string, object> JsonFields
+            {
+                get
+                {
+                    var d = new Dictionary<string, object>();
+                    if (K != null) d["k"] = K;
+                    if (S != null) d["s"] = S;
+                    if (Mismatch) d["mismatch"] = true;
+                    if (NoK) d["noK"] = true;
+                    return d;
+                }
+            }
         }
 
         // ── pattern analysis ───────────────────────────────────────────────
@@ -283,6 +365,27 @@ namespace AutoCommand.Views
             {
                 sb.AppendLine($"  ⚠ FLAG: service '{g.Key}' respawned {g.Count()}x during capture — crash/respawn loop");
                 _flags++;
+            }
+
+            // 1b. identity: -k group · -s service vs SCM ground truth
+            sb.AppendLine("\n--- IDENTITY (-k group · -s service vs SCM) ---");
+            if (_identByPid.Count == 0 && _identityFlags.Count == 0)
+            {
+                sb.AppendLine("  (no svchost instances captured)");
+            }
+            else
+            {
+                var readable = _identByPid.Values.Where(v => v.Visible).ToList();
+                int hidden = _identByPid.Count - readable.Count;
+                sb.AppendLine($"  {_identByPid.Count} current instance(s) · {readable.Count} readable command line(s) · {hidden} hidden" +
+                              (hidden > 0 ? " (non-elevated: SYSTEM svchost lines are unreadable — normal)" : ""));
+                foreach (var g in readable.GroupBy(v => v.K ?? "<no -k>").OrderByDescending(g => g.Count()))
+                    sb.AppendLine($"  group {g.Key}: {g.Count()} instance(s)");
+                // identity flags were counted when raised; here they are only reprinted
+                foreach (var (flagPid, flagText) in _identityFlags)
+                    sb.AppendLine($"  ⚠ FLAG: PID {flagPid} — {flagText}");
+                if (_identityFlags.Count == 0)
+                    sb.AppendLine("  every readable command line corroborates its SCM services");
             }
 
             // 2. destinations + classification

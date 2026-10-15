@@ -22,6 +22,12 @@ namespace AutoCommand.Models
 
         public DateTime TimeUtc { get; set; }
         public int Pid { get; set; }
+        /// <summary>
+        /// Sysmon's ProcessGuid (braces stripped) — kernel-assigned and unique
+        /// for the whole boot. Unlike the PID, it can never be recycled onto
+        /// another process, so it is the safest key for later attribution.
+        /// </summary>
+        public string ProcessGuid { get; set; }
         public string Image { get; set; }
         public string CommandLine { get; set; }
         public int ParentPid { get; set; }

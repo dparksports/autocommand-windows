@@ -24,15 +24,20 @@ namespace AutoCommand.Views
         private readonly string _knownName;
         private readonly string _knownImage;
         private readonly TaskLaunchInfo _taskHint;
+        private readonly DateTime? _hintSeenUtc;
+        private readonly DateTime? _knownCreatedUtc;
         private ProvenanceReport _report;
         private bool _busy;
 
-        public ProcessTraceWindow(int pid, string knownName, string knownImagePath, TaskLaunchInfo taskHint)
+        public ProcessTraceWindow(int pid, string knownName, string knownImagePath, TaskLaunchInfo taskHint,
+                                  DateTime? hintSeenUtc = null, DateTime? knownCreatedUtc = null)
         {
             _pid = pid;
             _knownName = knownName;
             _knownImage = knownImagePath;
             _taskHint = taskHint;
+            _hintSeenUtc = hintSeenUtc;
+            _knownCreatedUtc = knownCreatedUtc;
             InitializeComponent();
             Title = $"PID Inquiry — {pid} {knownName}".TrimEnd();
             Loaded += (_, _) => _ = CollectAsync();
@@ -46,7 +51,8 @@ namespace AutoCommand.Views
             {
                 StatusText.Text = "Collecting… (WMI snapshot, parent chain, Sysmon events, shell history)";
                 var report = await Task.Run(() =>
-                    ProcessProvenanceService.Collect(_pid, _knownName, _knownImage, _taskHint));
+                    ProcessProvenanceService.Collect(_pid, _knownName, _knownImage, _taskHint,
+                        _hintSeenUtc, _knownCreatedUtc));
                 _report = report;
                 Render(report);
                 StatusText.Text = $"Collected in {report.Elapsed.TotalSeconds:F1}s · {DateTime.Now:HH:mm:ss} · " +
@@ -86,7 +92,12 @@ namespace AutoCommand.Views
             IdentSession.Text = r.Session ?? "?";
             IdentMemory.Text = r.Alive ? r.Memory ?? "—" : "— (not running)";
             IdentImage.Text = r.ExePath;
-            IdentCmd.Text = r.CommandLine;
+            // svchost (and other SYSTEM) command lines are unreadable to a
+            // standard user — say so instead of showing a blank field
+            IdentCmd.Text = r.CommandLine ?? (
+                IsSvchostReport(r)
+                    ? "— hidden (standard users cannot read SYSTEM svchost lines; rerun elevated to corroborate -k/-s)"
+                    : null);
 
             var rows = new List<ChainRowVm>();
             for (int i = 0; i < r.Chain.Count; i++)
@@ -111,6 +122,11 @@ namespace AutoCommand.Views
                 ? null
                 : "⚠ " + string.Join("\n⚠ ", r.Warnings);
         }
+
+        /// <summary>True when the report's subject is the svchost service-host image.</summary>
+        private static bool IsSvchostReport(ProvenanceReport r) =>
+            string.Equals(r.Name, "svchost.exe", StringComparison.OrdinalIgnoreCase) ||
+            (r.ExePath?.EndsWith("\\svchost.exe", StringComparison.OrdinalIgnoreCase) ?? false);
 
         private void RefreshBtn_Click(object sender, RoutedEventArgs e) => _ = CollectAsync();
 
@@ -137,6 +153,13 @@ namespace AutoCommand.Views
                           $"owner {r.Owner ?? "?"} · {(r.Alive ? "running" : "not running")}");
             if (!string.IsNullOrEmpty(r.CommandLine))
                 sb.AppendLine("Command line: " + r.CommandLine);
+            if (r.Recycled && !string.IsNullOrEmpty(r.CurrentOwnerSummary))
+            {
+                sb.AppendLine();
+                sb.AppendLine("⚠ PID RECYCLED — the subject above has EXITED. The PID now belongs to:");
+                sb.AppendLine("      " + r.CurrentOwnerSummary);
+                sb.AppendLine("      (unrelated process — everything below describes the exited subject)");
+            }
             sb.AppendLine();
             sb.AppendLine("SPAWN CHAIN (child → root):");
             foreach (var link in r.Chain)

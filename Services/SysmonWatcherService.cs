@@ -269,7 +269,8 @@ namespace AutoCommand.Services
                     // row per IP is all the model allows.
                     if (existing.ProcessId <= 0 || IsProcessAlive(existing.ProcessId)) return;
 
-                    existing.Reattribute(pid, processName, string.IsNullOrEmpty(image) ? null : image);
+                    existing.Reattribute(pid, processName, string.IsNullOrEmpty(image) ? null : image,
+                        TryGetProcessStartUtc(pid));
                     return;
                 }
 
@@ -291,6 +292,10 @@ namespace AutoCommand.Services
                     RemoteIp    = destIp,
                     Hostname    = initialHost,
                     Protocol    = protocol,
+                    // Capture-time identity anchor: the start time binds the
+                    // row to this tenant of the PID, so a later inquiry can
+                    // never mistake a recycled PID's new owner for it.
+                    ProcessStartedUtc = TryGetProcessStartUtc(pid),
                     // Seed from the event itself: the packets that triggered
                     // this event usually crossed the wire before the row
                     // entered tracking, so a one-shot connection would else
@@ -331,6 +336,18 @@ namespace AutoCommand.Services
                 // Process has already exited, or we don't have access (e.g. System/Idle)
                 return string.Empty;
             }
+        }
+
+        /// <summary>
+        /// The PID's start time (UTC), or null when unreadable (exited or
+        /// access denied). Called once per row creation — this is the
+        /// timestamp that keeps a row's identity safe from PID recycling.
+        /// </summary>
+        private static DateTime? TryGetProcessStartUtc(int pid)
+        {
+            if (pid <= 0) return null;
+            try { return Process.GetProcessById(pid).StartTime.ToUniversalTime(); }
+            catch { return null; }
         }
 
         /// <summary>True while the PID still exists (PID 0, System/Idle, never exits).</summary>

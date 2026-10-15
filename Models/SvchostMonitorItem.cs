@@ -28,6 +28,15 @@ namespace AutoCommand.Models
         /// </summary>
         public string ImagePath { get; set; }
 
+        /// <summary>
+        /// When the row's process started (UTC), captured once at row
+        /// creation. PIDs are recycled aggressively; this timestamp — with
+        /// the Sysmon image path — is the row's stable process identity.
+        /// Later PID inquiries use it to tell the row's process from any
+        /// unrelated process that has since inherited the number.
+        /// </summary>
+        public DateTime? ProcessStartedUtc { get; set; }
+
         public string Hostname
         {
             get => _hostname;
@@ -105,28 +114,136 @@ namespace AutoCommand.Models
         /// different PID connected to the same remote IP, so counters keep
         /// accruing to a live process instead of a ghost PID.
         /// </summary>
-        public void Reattribute(int processId, string processName, string imagePath)
+        public void Reattribute(int processId, string processName, string imagePath,
+                                DateTime? processStartedUtc = null)
         {
             ProcessId = processId;
             ProcessName = processName;
             if (!string.IsNullOrEmpty(imagePath)) ImagePath = imagePath;
+            ProcessStartedUtc = processStartedUtc;
 
             TaskName = null;   // the old process's task attribution no longer applies
             TaskUser = null;
+
+            // The old tenant's service identity does not describe the new one
+            // either — enrichment re-resolves it for the new process.
+            _identityResolved = false;
+            _hostedServices = null;
+            _servicesDetail = null;
+            _svchostGroup = null;
+            _declaredService = null;
+            _identitySuspicious = false;
 
             HasExited = false;
             OnPropertyChanged(nameof(ProcessDisplay));
             OnPropertyChanged(nameof(ProcessToolTip));
         }
 
-        /// <summary>Friendly display: "PID (name)", "PID" when the name is unknown, "— exited" once the process is gone.</summary>
+        // -------------------------------------------------------------------
+        // svchost identity — "which of the 74 instances is this?"
+        //
+        // svchost.exe is one generic binary; an instance's identity is the
+        // SCM's PID→service map (ground truth) corroborated by its command
+        // line (-k group · -s single tenant). Resolved asynchronously by
+        // SvchostIdentityService once per row.
+        // -------------------------------------------------------------------
+
+        /// <summary>True when this row's process is a service host image.</summary>
+        public bool IsSvchost =>
+            string.Equals(ProcessName, "svchost.exe", StringComparison.OrdinalIgnoreCase);
+
+        private string _hostedServices;    // SCM-resident service names, csv ("WpnService")
+        private string _servicesDetail;    // names + display names + state, multi-line, for tooltips
+        private string _svchostGroup;      // -k netsvcs
+        private string _declaredService;   // -s WpnService
+        private bool _identitySuspicious;  // -s/SCM mismatch, or visible cmdline without -k
+        private bool _cmdLineHidden;       // svchost row whose command line was unreadable
+        private bool _identityResolved;
+        private bool _identityPending;
+
+        /// <summary>True while the row is a svchost whose identity has not been resolved yet.</summary>
+        public bool NeedsSvchostIdentity => IsSvchost && !_identityResolved && !_identityPending;
+
+        /// <summary>
+        /// Claims the row for identity resolution (one async attempt at a
+        /// time); false when resolution is already done or in flight.
+        /// </summary>
+        public bool TryBeginIdentity()
+        {
+            if (!NeedsSvchostIdentity) return false;
+            _identityPending = true;
+            return true;
+        }
+
+        /// <summary>Releases a failed resolve attempt so the next tick can retry.</summary>
+        public void AbandonIdentity() => _identityPending = false;
+
+        /// <summary>Stamps the resolved svchost identity (SCM services + -k/-s tokens).</summary>
+        public void SetSvchostIdentity(string hostedServicesCsv, string servicesDetail,
+                                       string group, string declaredService,
+                                       bool commandLineVisible, bool suspicious)
+        {
+            _hostedServices = hostedServicesCsv ?? "";
+            _servicesDetail = servicesDetail;
+            _svchostGroup = group;
+            _declaredService = declaredService;
+            _identitySuspicious = suspicious;
+            _cmdLineHidden = !commandLineVisible;
+            _identityResolved = true;
+            _identityPending = false;
+            OnPropertyChanged(nameof(ProcessDisplay));
+            OnPropertyChanged(nameof(ProcessToolTip));
+            OnPropertyChanged(nameof(IdentityLabel));
+        }
+
+        /// <summary>Compact service list for the Process cell: "WpnService", "A+B", "A+2 more".</summary>
+        private string ServicesCompact
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_hostedServices)) return "no service";
+                var names = _hostedServices.Split(',');
+                return names.Length == 1 ? names[0]
+                    : names.Length == 2 ? $"{names[0]}+{names[1]}"
+                    : $"{names[0]}+{names.Length - 1} more";
+            }
+        }
+
+        /// <summary>
+        /// True once the row's hosted services are known (resolved identity
+        /// with at least one SCM service).
+        /// </summary>
+        public bool HasServiceIdentity => IsSvchost && _identityResolved && !string.IsNullOrEmpty(_hostedServices);
+
+        /// <summary>
+        /// Short identity label for dropdowns and report text: the hosted
+        /// service for svchost rows, the image name for everything else.
+        /// </summary>
+        public string IdentityLabel =>
+            IsSvchost && _identityResolved ? ServicesCompact : (ProcessName ?? "?");
+
+        /// <summary>
+        /// True when the resolved identity carries a masquerade signal — the
+        /// -s claim contradicts the SCM, or a readable command line has no -k.
+        /// </summary>
+        public bool IdentitySuspicious => _identitySuspicious;
+
+        /// <summary>
+        /// Friendly display: "PID (name)", "PID (svchost.exe [WpnService])"
+        /// for resolved service hosts (the bracket is what tells the 74
+        /// svchost instances apart), "— exited" once the process is gone.
+        /// </summary>
         public string ProcessDisplay
         {
             get
             {
-                var text = string.IsNullOrEmpty(ProcessName)
-                    ? ProcessId.ToString()
-                    : $"{ProcessId} ({ProcessName})";
+                string text;
+                if (IsSvchost && _identityResolved)
+                    text = $"{ProcessId} (svchost.exe [{ServicesCompact}]{(_identitySuspicious ? " ⚠" : "")})";
+                else if (string.IsNullOrEmpty(ProcessName))
+                    text = ProcessId.ToString();
+                else
+                    text = $"{ProcessId} ({ProcessName})";
                 return HasExited ? $"{text} — exited" : text;
             }
         }
@@ -207,20 +324,48 @@ namespace AutoCommand.Models
             TaskUser = taskUser;
         }
 
-        /// <summary>Tooltip for the Process column: image path plus scheduled-task attribution.</summary>
+        /// <summary>True when the Process tooltip has any content to show.</summary>
+        public bool HasToolTip =>
+            !string.IsNullOrEmpty(ImagePath) || TaskName != null || (IsSvchost && _identityResolved);
+
+        /// <summary>
+        /// Tooltip for the Process column: image path, scheduled-task
+        /// attribution, and — for resolved svchost rows — the full service
+        /// identity (SCM ground truth, -k group, -s claim, corroboration).
+        /// </summary>
         public string ProcessToolTip
         {
             get
             {
-                if (string.IsNullOrEmpty(ImagePath) && TaskName == null) return null;
                 var sb = new StringBuilder();
                 if (!string.IsNullOrEmpty(ImagePath)) sb.AppendLine(ImagePath);
                 if (TaskName != null)
                 {
                     sb.Append("Task: ").Append(TaskName);
                     if (!string.IsNullOrEmpty(TaskUser)) sb.Append("   (as ").Append(TaskUser).Append(')');
+                    sb.AppendLine();
                 }
-                return sb.ToString();
+                if (IsSvchost && _identityResolved)
+                {
+                    sb.AppendLine("svchost identity:");
+                    if (!string.IsNullOrEmpty(_servicesDetail)) sb.AppendLine(_servicesDetail);
+                    sb.Append("group (-k): ").Append(string.IsNullOrEmpty(_svchostGroup) ? "—" : _svchostGroup)
+                      .Append(" · self-declared (-s): ").Append(string.IsNullOrEmpty(_declaredService) ? "—" : _declaredService);
+                    if (_identitySuspicious)
+                        sb.AppendLine("   ⚠ identity signal — see below");
+                    else
+                        sb.AppendLine();
+                    if (string.IsNullOrEmpty(_hostedServices))
+                        sb.Append("⚠ no service resolves to this PID — the strongest single masquerade red flag");
+                    else if (_identitySuspicious)
+                        sb.Append("⚠ command line contradicts the SCM-resident services — masquerade signal (audit-svchost.ps1)");
+                    else if (_cmdLineHidden)
+                        sb.Append("command line hidden (standard user cannot read SYSTEM svchost lines) — rerun elevated to corroborate -k/-s");
+                    else
+                        sb.Append("command line corroborates the SCM ✓");
+                }
+                var text = sb.ToString();
+                return text.Length == 0 ? null : text;
             }
         }
 

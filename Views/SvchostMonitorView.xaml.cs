@@ -126,6 +126,12 @@ namespace AutoCommand.Views
                 foreach (var item in _uiCollection)
                     EnrichWithTaskInfo(item);
 
+                // Resolve svchost rows' service identity (which -s service /
+                // SCM tenant each instance is) — rows created mid-tick and
+                // re-attributed rows land here on the next pass.
+                foreach (var item in _uiCollection)
+                    EnrichWithSvchostIdentity(item);
+
                 DnsCacheChip.Text = $"DNS cache: {_dnsService.CacheCount} entries";
                 UpdateHighTxChip();
             };
@@ -353,6 +359,7 @@ namespace AutoCommand.Views
                     return;
                 }
                 EnrichWithTaskInfo(item);
+                EnrichWithSvchostIdentity(item);
                 _uiCollection.Add(item);
             });
         }
@@ -364,9 +371,34 @@ namespace AutoCommand.Views
         private void EnrichWithTaskInfo(SvchostMonitorItem item)
         {
             if (item.TaskName != null) return;
-            var info = _taskAttribution.GetTaskForPid(item.ProcessId);
+            var info = _taskAttribution.GetTaskForPid(item.ProcessId, item.ProcessStartedUtc);
             if (info == null || string.IsNullOrEmpty(info.TaskPath)) return;
             item.SetTaskInfo(info.TaskPath, info.UserContext);
+        }
+
+        /// <summary>
+        /// Resolves a svchost row's service identity (SCM-hosted services +
+        /// -k/-s command-line tokens) on a background thread and stamps it on
+        /// the UI thread. One attempt per row at a time; the 10-second timer
+        /// retries rows still unresolved (fresh spawns, re-attributed tenants).
+        /// </summary>
+        private async void EnrichWithSvchostIdentity(SvchostMonitorItem item)
+        {
+            if (!item.TryBeginIdentity()) return;
+            int pid = item.ProcessId;
+            try
+            {
+                var id = await Task.Run(() => Services.SvchostIdentityService.Resolve(pid));
+                // The row may have been re-attributed while the WMI query ran —
+                // the identity belongs to the old tenant, not the new one.
+                if (item.ProcessId != pid) { item.AbandonIdentity(); return; }
+                item.SetSvchostIdentity(id.ServicesCsv, id.ServicesDetail, id.Group, id.DeclaredService,
+                                        id.CommandLineVisible, id.Mismatch || id.NoK);
+            }
+            catch
+            {
+                item.AbandonIdentity(); // retried on the next timer tick
+            }
         }
 
         private void ToggleMonitorBtn_Click(object sender, RoutedEventArgs e)
@@ -565,7 +597,9 @@ namespace AutoCommand.Views
                 .OrderByDescending(i => i.LastSeen)
                 .Select(i => i.ProcessId == 0
                     ? "0 · System"
-                    : $"{i.ProcessId} · {i.ProcessName ?? "?"}")
+                    // svchost entries list their hosted service — the
+                    // identity — instead of the shared image name
+                    : $"{i.ProcessId} · {i.IdentityLabel}")
                 .ToList();
             PidCombo.Text = typed;
         }
@@ -616,7 +650,9 @@ namespace AutoCommand.Views
                 pid,
                 item?.ProcessName,
                 item?.ImagePath,
-                item != null ? _taskAttribution.GetTaskForPid(pid) : null)
+                item != null ? _taskAttribution.GetTaskForPid(pid, item.ProcessStartedUtc) : null,
+                item?.LastSeen,          // hints are as-of the last traffic sighting (UTC)
+                item?.ProcessStartedUtc) // capture-time process start — strongest tenant check
             {
                 Owner = Window.GetWindow(this)
             };
@@ -728,7 +764,10 @@ namespace AutoCommand.Views
         {
             string host = "";
             try { host = item.HostnameDisplay is string h && h.Contains("…") == false && h != "resolving…" ? $" host {h}" : ""; } catch { }
-            return $"[blocked {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC] {item.ProcessName} PID {item.ProcessId} {what}{host} · " +
+            // svchost blocks say which service was actually blocked — the
+            // identity survives in wf.msc even after the PID is recycled
+            string svc = item.HasServiceIdentity ? $" [{item.IdentityLabel}]" : "";
+            return $"[blocked {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC] {item.ProcessName}{svc} PID {item.ProcessId} {what}{host} · " +
                    $"rx {item.RxBytesDisplay} tx {item.TxBytesDisplay} · AutoCommand Process Monitor";
         }
 
@@ -834,7 +873,7 @@ namespace AutoCommand.Views
 
             // What code the task actually executes (COM-handler DLL), when
             // attribution has it — DLL tasks have no command line of their own
-            var launch = _taskAttribution.GetTaskForPid(item.ProcessId);
+            var launch = _taskAttribution.GetTaskForPid(item.ProcessId, item.ProcessStartedUtc);
             if (launch?.HandlerClassId != null)
             {
                 string handler = launch.HandlerDllExists == true
@@ -996,7 +1035,7 @@ namespace AutoCommand.Views
             sb.AppendLine("Currently Tracked Processes and Connections:");
             foreach (var item in items)
             {
-                sb.AppendLine($"- Process: {item.ProcessName} (PID: {item.ProcessId}{(item.HasExited ? ", exited" : "")}) | Remote IP: {item.RemoteIp} ({item.Hostname}) | Packets: {item.TxPackets} sent, {item.RxPackets} received | Last Seen: {item.LastSeen:u}");
+                sb.AppendLine($"- Process: {item.ProcessName}{(item.HasServiceIdentity ? $" [{item.IdentityLabel}]" : "")} (PID: {item.ProcessId}{(item.HasExited ? ", exited" : "")}) | Remote IP: {item.RemoteIp} ({item.Hostname}) | Packets: {item.TxPackets} sent, {item.RxPackets} received | Last Seen: {item.LastSeen:u}");
             }
             return sb.ToString();
         }

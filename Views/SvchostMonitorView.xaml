@@ -163,7 +163,7 @@
                                     <Style TargetType="TextBlock">
                                         <Setter Property="ToolTip" Value="{Binding ProcessToolTip}"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ImagePath}" Value="{x:Null}">
+                                            <DataTrigger Binding="{Binding HasToolTip}" Value="False">
                                                 <Setter Property="ToolTip" Value="{x:Null}"/>
                                             </DataTrigger>
                                         </Style.Triggers>

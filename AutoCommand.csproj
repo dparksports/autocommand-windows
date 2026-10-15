@@ -78,7 +78,9 @@
     <Error Condition="'$(Version)' == ''"
            Text="GenerateVersionAssemblyInfo: &lt;Version&gt; is empty — it is the single source of truth and must be set (e.g. 2026.10.15)." />
     <PropertyGroup>
-      <Version4>$([System.Version]::Parse('$(Version)').ToString()).0</Version4>
+      <!-- exactly four segments: 3-part versions get .0, a same-day fourth
+           segment (2026.10.14.1) passes through unchanged -->
+      <Version4>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '^\d+\.\d+\.\d+$', '$0.0'))</Version4>
       <GeneratedVersionFile>$(IntermediateOutputPath)GeneratedVersionInfo.cs</GeneratedVersionFile>
     </PropertyGroup>
     <MakeDir Directories="$(IntermediateOutputPath)" Condition="!Exists('$(IntermediateOutputPath)')" />

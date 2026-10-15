@@ -10,6 +10,7 @@
 #
 # Usage:
 #   powershell -File release.ps1 -Version 2026.10.16   # full release (pushes!)
+#   powershell -File release.ps1 -Version 2026.10.14.1 # same-day follow-up (4th segment)
 #   powershell -File release.ps1 -Version 2026.10.16 -Yes   # no confirm prompt
 #   powershell -File release.ps1 -DryRun               # package + verify only
 #
@@ -52,7 +53,9 @@ $currentVersion = $Matches[1]
 
 if (-not $DryRun) {
     if (-not $Version) { Die 'usage: release.ps1 -Version <N.N.N> (e.g. 2026.10.16) [-DryRun] [-Yes]' }
-    if ($Version -notmatch '^\d+\.\d+\.\d+$') { Die "version '$Version' must be three-part (e.g. 2026.10.16)" }
+    # Three calendar segments, optional fourth for same-day follow-ups
+    # (v2026.10.14.1) - keeps the date truthful instead of future-dating it.
+    if ($Version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') { Die "version '$Version' must be calendar-dated, three parts or a fourth same-day segment (e.g. 2026.10.16 or 2026.10.14.1)" }
     if ([version]$Version -le [version]$currentVersion) {
         Die "v$Version must be greater than the current v$currentVersion"
     }
@@ -111,8 +114,8 @@ if ($DryRun) {
 }
 
 # -- Fail-closed gate: nothing below may run without a validated version ------
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    Die "refusing to release: Version=[$Version] is not a valid three-part version"
+if ($Version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+    Die "refusing to release: Version=[$Version] is not a valid calendar version"
 }
 if (-not $Yes) {
     $answer = Read-Host "About to commit, tag v$Version, PUSH to origin and create the GitHub release. Type 'release' to proceed"

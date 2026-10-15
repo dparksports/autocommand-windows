@@ -51,6 +51,24 @@ namespace AutoCommand.Services
         public string Memory;
         public DateTime? Created;
 
+        /// <summary>
+        /// True when the live PID is NOT the process the caller asked about:
+        /// the hinted identity disagrees with the live snapshot, so Windows
+        /// recycled the PID and the subject has exited. Identity, chain and
+        /// verdict then describe the exited subject; the unrelated current
+        /// owner of the number is reported separately (CurrentOwner*).
+        /// </summary>
+        public bool Recycled;
+
+        /// <summary>Name of the unrelated process that now owns the recycled PID.</summary>
+        public string CurrentOwnerName;
+
+        /// <summary>Start time of the unrelated process that now owns the recycled PID.</summary>
+        public DateTime? CurrentOwnerCreated;
+
+        /// <summary>One-line identity of the current PID owner, for report text.</summary>
+        public string CurrentOwnerSummary;
+
         public string Verdict;
         public string VerdictDetail;
 
@@ -68,6 +86,11 @@ namespace AutoCommand.Services
     ///   2. Parent-chain walk with a PID-reuse guard: a parent only counts
     ///      when its creation time predates the child's. Windows recycles
     ///      PIDs aggressively; a naive PPID lookup blames an innocent process.
+    ///      The same guard covers the TARGET itself: when the caller's hints
+    ///      (capture-time name/image, the subject's start time, the last
+    ///      sighting) disagree with the live snapshot, the PID was recycled —
+    ///      the report describes the EXITED subject and never merges it with
+    ///      the unrelated process that inherited the number.
     ///   3. Corroboration from recorded create-events: Sysmon EID 1 (ground
     ///      truth that survives process exit), Security 4688 as fallback
     ///   4. Interactive-shell evidence: PSReadLine history matches for the
@@ -98,7 +121,9 @@ namespace AutoCommand.Services
 
         public static ProvenanceReport Collect(int pid, string knownName = null,
                                                 string knownImagePath = null,
-                                                TaskLaunchInfo taskHint = null)
+                                                TaskLaunchInfo taskHint = null,
+                                                DateTime? hintSeenUtc = null,
+                                                DateTime? knownCreatedUtc = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var r = new ProvenanceReport
@@ -109,7 +134,31 @@ namespace AutoCommand.Services
             };
 
             var target = QueryProcess(pid);
+
+            // Target-PID reuse guard. The hints describe the process the
+            // caller SAW (capture-time name/image, the subject's own start
+            // time, the last traffic sighting); the live snapshot describes
+            // whoever owns the PID NOW. When they disagree, Windows recycled
+            // the PID in between: the subject has exited and the live process
+            // is an unrelated bystander. Merging the two tenants is exactly
+            // how a report ends up claiming bash.exe was launched by a
+            // SYSTEM scheduled task.
+            bool recycled = false;
             if (target != null)
+            {
+                bool createdMismatch =
+                    knownCreatedUtc.HasValue && target.Created.HasValue &&
+                    (target.Created.Value.ToUniversalTime() - knownCreatedUtc.Value.ToUniversalTime()).Duration()
+                        > TimeSpan.FromSeconds(5);
+                bool newerThanLastSighting =
+                    hintSeenUtc.HasValue && target.Created.HasValue &&
+                    target.Created.Value.ToUniversalTime() > hintSeenUtc.Value.ToUniversalTime();
+                recycled = createdMismatch || newerThanLastSighting ||
+                           !NamesMatch(knownName, target.Name) ||
+                           !ImagesMatch(knownImagePath, target.ExePath);
+            }
+
+            if (target != null && !recycled)
             {
                 r.Alive = true;
                 r.Name = target.Name;
@@ -122,6 +171,39 @@ namespace AutoCommand.Services
                     : target.SessionId.ToString();
                 r.Memory = FormatBytes(target.WorkingSet);
             }
+            else if (recycled)
+            {
+                r.Recycled = true;
+                r.Alive = false;   // the SUBJECT is dead — only its PID lives on
+
+                r.CurrentOwnerName = target.Name;
+                r.CurrentOwnerCreated = target.Created;
+                string ownerCmd = target.CommandLine;
+                if (!string.IsNullOrEmpty(ownerCmd) && ownerCmd.Length > 240)
+                    ownerCmd = ownerCmd.Substring(0, 240) + "…";
+                r.CurrentOwnerSummary =
+                    $"{target.Name} · image {target.ExePath ?? "?"} · started {target.Created:yyyy-MM-dd HH:mm:ss} · " +
+                    $"owner {target.Owner ?? "?"} · session {target.SessionId}";
+                r.Warnings.Add(
+                    $"PID {pid} was recycled: the process this inquiry is about ({r.Name}) has exited. " +
+                    $"The PID now belongs to {target.Name} (started {target.Created:yyyy-MM-dd HH:mm:ss}) — an " +
+                    "unrelated process. Identity, chain and verdict describe the exited subject; the current " +
+                    "PID owner is listed separately in the evidence.");
+                r.Evidence.Add(new EvidenceItem
+                {
+                    Source = "Current PID owner (unrelated)",
+                    Detail = $"PID {pid} now belongs to {target.Name}, started " +
+                             $"{target.Created:yyyy-MM-dd HH:mm:ss}, owner {target.Owner ?? "?"}.\r\n" +
+                             $"      image: {target.ExePath ?? "?"}\r\n" +
+                             $"      command line: {ownerCmd ?? "(unreadable)"}"
+                });
+
+                // Everything downstream must treat the subject as a dead
+                // process: a null target keeps the chain walk, the hosted-
+                // service scan and the Sysmon record preference from reading
+                // the bystander as the subject.
+                target = null;
+            }
             else
             {
                 r.Warnings.Add("Process is not running — live snapshot unavailable. " +
@@ -129,11 +211,12 @@ namespace AutoCommand.Services
             }
 
             BuildChain(r, target);
-            CorroborateSysmon(r);
+            CorroborateSysmon(r, hintSeenUtc);
             CorroborateAudit4688(r);
             ScanShellHistory(r);
             ScanStartupEntries(r);
-            EnumerateHostedServices(r, target);
+            var hostedServices = EnumerateHostedServices(r, target);
+            AnalyzeSvchostIdentity(r, target, hostedServices);
             AddTaskHintEvidence(r, taskHint);
             (r.Verdict, r.VerdictDetail) = Classify(r, taskHint);
 
@@ -156,7 +239,9 @@ namespace AutoCommand.Services
                     CommandLine = r.CommandLine,
                     Created = r.Created,
                     Verified = false,
-                    Note = "not running at inquiry time"
+                    Note = r.Recycled
+                        ? "subject exited before this inquiry — the PID now belongs to a different, unrelated process (see evidence)"
+                        : "not running at inquiry time"
                 });
                 return;
             }
@@ -221,10 +306,41 @@ namespace AutoCommand.Services
             }
         }
 
+        // ── PID-tenant identity helpers ───────────────────────────────────
+
+        /// <summary>
+        /// Case-insensitive process-name compare with .exe normalization —
+        /// "taskhostw", "taskhostw.exe" and "TASKHOSTW.EXE" are the same
+        /// process. Null/empty sides constrain nothing (no hint, no veto).
+        /// </summary>
+        private static bool NamesMatch(string hinted, string live)
+        {
+            if (string.IsNullOrEmpty(hinted) || string.IsNullOrEmpty(live)) return true;
+            string Normalize(string s)
+            {
+                s = s.Trim().ToLowerInvariant();
+                return s.EndsWith(".exe", StringComparison.Ordinal) ? s : s + ".exe";
+            }
+            return Normalize(hinted) == Normalize(live);
+        }
+
+        /// <summary>
+        /// Image-path compare tolerant of spelling differences between
+        /// sources (Sysmon paths vs WMI paths): exact path first, file name
+        /// as fallback. Null/empty sides constrain nothing.
+        /// </summary>
+        private static bool ImagesMatch(string hinted, string live)
+        {
+            if (string.IsNullOrEmpty(hinted) || string.IsNullOrEmpty(live)) return true;
+            if (string.Equals(hinted.Trim(), live.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+            return string.Equals(Path.GetFileName(hinted.Trim()), Path.GetFileName(live.Trim()),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         // ── recorded create-events (survive process exit) ──────────────────
 
         /// <summary>Sysmon Event ID 1 — the authoritative record of the spawn.</summary>
-        private static void CorroborateSysmon(ProvenanceReport r)
+        private static void CorroborateSysmon(ProvenanceReport r, DateTime? hintSeenUtc)
         {
             try
             {
@@ -235,56 +351,84 @@ namespace AutoCommand.Services
                 };
                 using var reader = new EventLogReader(query);
 
-                Dictionary<string, string> best = null;
-                DateTime? bestUtc = null;
+                // Up to 5 newest create-events: a recycled PID can have
+                // several tenants in the log. Which record speaks for the
+                // SUBJECT is decided by preference, not recency alone:
+                //   1. the record matching the subject's known creation time
+                //      (the alive / same-tenant case)
+                //   2. a record for the hinted image at/before the last
+                //      sighting — a dead subject, never a later tenant
+                //   3. any record at/before the last sighting
+                //   4. the newest record (legacy behavior when no hints exist)
+                var records = new List<(Dictionary<string, string> Fields, DateTime? Utc)>();
                 for (int i = 0; i < 5; i++)
                 {
                     var rec = reader.ReadEvent();
                     if (rec == null) break;
-
-                    var fields = ParseEventData(rec);
-                    best ??= fields;
-                    if (!TryParseSysmonUtc(fields, out DateTime utc)) continue;
-
-                    bestUtc = utc;
-                    // Prefer the record matching the live creation time —
-                    // the PID may have existed in an earlier boot.
-                    if (r.Created.HasValue)
+                    using (rec)
                     {
-                        var skew = (utc.ToLocalTime() - r.Created.Value).Duration();
-                        if (skew <= TimeSpan.FromSeconds(5))
+                        var fields = ParseEventData(rec);
+                        TryParseSysmonUtc(fields, out DateTime utc);
+                        records.Add((fields, utc == default ? (DateTime?)null : utc));
+
+                        if (r.Created.HasValue && utc != default &&
+                            (utc.ToLocalTime() - r.Created.Value).Duration() <= TimeSpan.FromSeconds(5))
                         {
-                            best = fields;
+                            records.Clear();            // authoritative match —
+                            records.Add((fields, utc)); // nothing else competes
                             break;
                         }
                     }
                 }
-                if (best == null) return;
 
-                if (bestUtc == null && TryParseSysmonUtc(best, out DateTime fallbackUtc))
+                (Dictionary<string, string> Fields, DateTime? Utc) best = default;
+                int bestScore = -1;
+                DateTime? windowUtc = hintSeenUtc?.ToUniversalTime();
+                foreach (var (fields, utc) in records)
+                {
+                    bool inWindow = utc.HasValue && windowUtc.HasValue &&
+                                    utc.Value <= windowUtc.Value + TimeSpan.FromSeconds(5);
+                    bool imageMatch = r.ExePath != null &&
+                                      fields.TryGetValue("Image", out string img) &&
+                                      ImagesMatch(r.ExePath, img);
+
+                    int score = inWindow && imageMatch ? 3
+                              : inWindow ? 2
+                              : imageMatch && windowUtc == null ? 1
+                              : 0;
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = (fields, utc);
+                    }
+                }
+                if (best.Fields == null) return;
+                var bestFields = best.Fields;
+                DateTime? bestUtc = best.Utc;
+                if (bestUtc == null && TryParseSysmonUtc(bestFields, out DateTime fallbackUtc))
                     bestUtc = fallbackUtc;
 
                 // Dead process with no hints: the event IS the identity
                 if (!r.Alive)
                 {
-                    if (best.TryGetValue("Image", out string img))
+                    if (bestFields.TryGetValue("Image", out string img))
                     {
                         r.Name = Path.GetFileName(img);
                         r.ExePath ??= img;
                     }
-                    r.CommandLine ??= best.TryGetValue("CommandLine", out string cl) ? cl : null;
-                    r.Owner ??= best.TryGetValue("User", out string usr) ? usr : null;
+                    r.CommandLine ??= bestFields.TryGetValue("CommandLine", out string cl) ? cl : null;
+                    r.Owner ??= bestFields.TryGetValue("User", out string usr) ? usr : null;
                     if (bestUtc != null) r.Created ??= bestUtc.Value.ToLocalTime();
                 }
 
                 string when = bestUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "time unknown";
                 string detail =
-                    $"created {when} · image {best.GetValueOrDefault("Image")}" +
-                    $" · parent {best.GetValueOrDefault("ParentImage")} (PID {best.GetValueOrDefault("ParentProcessId")})" +
-                    $" · user {best.GetValueOrDefault("User")}";
-                if (best.TryGetValue("CommandLine", out string cl2) && !string.IsNullOrEmpty(cl2))
+                    $"created {when} · image {bestFields.GetValueOrDefault("Image")}" +
+                    $" · parent {bestFields.GetValueOrDefault("ParentImage")} (PID {bestFields.GetValueOrDefault("ParentProcessId")})" +
+                    $" · user {bestFields.GetValueOrDefault("User")}";
+                if (bestFields.TryGetValue("CommandLine", out string cl2) && !string.IsNullOrEmpty(cl2))
                     detail += $"\r\n      command line: {cl2}";
-                if (best.TryGetValue("ParentCommandLine", out string pcl) && !string.IsNullOrEmpty(pcl))
+                if (bestFields.TryGetValue("ParentCommandLine", out string pcl) && !string.IsNullOrEmpty(pcl))
                     detail += $"\r\n      parent command line: {pcl}";
                 r.Evidence.Add(new EvidenceItem
                 {
@@ -433,28 +577,89 @@ namespace AutoCommand.Services
             }
         }
 
-        /// <summary>Services hosted by the target itself (svchost rows; also flags any process hosting one).</summary>
-        private static void EnumerateHostedServices(ProvenanceReport r, ProcSnap target)
+        /// <summary>
+        /// Services hosted by the target itself (svchost rows; also flags any
+        /// process hosting one). Returns the service names for the identity
+        /// cross-check.
+        /// </summary>
+        private static List<string> EnumerateHostedServices(ProvenanceReport r, ProcSnap target)
         {
-            if (target == null) return;
+            if (target == null) return new List<string>();
             try
             {
                 using var searcher = new ManagementObjectSearcher(
                     $"SELECT Name, DisplayName, State FROM Win32_Service WHERE ProcessId = {r.Pid}");
                 var names = new List<string>();
+                var lines = new List<string>();
                 foreach (ManagementObject o in searcher.Get())
-                    names.Add($"{o["Name"]} ({o["State"]})");
+                {
+                    string name = o["Name"]?.ToString();
+                    if (string.IsNullOrEmpty(name)) continue;
+                    names.Add(name);
+                    lines.Add($"{name} — {o["DisplayName"]} ({o["State"]})");
+                }
                 if (names.Count > 0)
                     r.Evidence.Add(new EvidenceItem
                     {
                         Source = "Services hosted",
-                        Detail = string.Join(", ", names)
+                        Detail = string.Join("\r\n      ", lines)
                     });
+                return names;
             }
             catch
             {
                 // best-effort evidence only
+                return new List<string>();
             }
+        }
+
+        /// <summary>
+        /// Decodes a svchost subject's command line ("-k netsvcs -p -s
+        /// WpnService") into its identity: the -k service group (a pool dozens
+        /// of instances share) and the -s single tenant, corroborated against
+        /// the SCM-resident services — the ground truth a genuine instance
+        /// always matches. A hidden command line (standard users cannot read
+        /// SYSTEM svchost lines) is disclosed, never guessed.
+        /// </summary>
+        private static void AnalyzeSvchostIdentity(ProvenanceReport r, ProcSnap target, List<string> hostedServices)
+        {
+            bool isSvchost =
+                string.Equals(r.Name, "svchost.exe", StringComparison.OrdinalIgnoreCase) ||
+                (r.ExePath?.EndsWith("\\svchost.exe", StringComparison.OrdinalIgnoreCase) ?? false);
+            if (!isSvchost) return;
+
+            var id = SvchostAnalyzer.Core.SvchostIdentity.Parse(r.CommandLine);
+            if (string.IsNullOrEmpty(r.CommandLine))
+            {
+                r.Warnings.Add(
+                    "svchost command line hidden — standard users cannot read SYSTEM svchost command lines. " +
+                    "Rerun elevated to corroborate the -k group / -s service against the SCM services above.");
+                return;
+            }
+
+            string group = id.Group ?? "<none>";
+            string declared = id.DeclaredService ?? "<none — grouped host>";
+            string detail = $"-k group: {group} (the service pool) · -s service: {declared}";
+
+            // Corroborate only against the live SCM map while the subject is
+            // the PID's live tenant — a recycled PID hosts someone else now.
+            if (target != null && hostedServices.Count > 0)
+            {
+                string csv = string.Join(",", hostedServices);
+                detail += SvchostAnalyzer.Core.SvchostIdentity.Mismatches(id.DeclaredService, csv)
+                    ? $"\r\n      ⚠ -s '{id.DeclaredService}' is NOT among the SCM services for this PID ({csv}) — masquerade signal"
+                    : "\r\n      command line corroborates the SCM services ✓";
+            }
+            else
+            {
+                detail += "\r\n      SCM corroboration unavailable (subject exited — PID may host other services now)";
+            }
+            r.Evidence.Add(new EvidenceItem { Source = "Svchost identity", Detail = detail });
+
+            if (id.Group == null)
+                r.Warnings.Add(
+                    "svchost command line has no -k service group — the SCM always passes -k to a real service host; " +
+                    "this is a masquerade signal (see audit-svchost.ps1).");
         }
 
         private static void AddTaskHintEvidence(ProvenanceReport r, TaskLaunchInfo taskHint)
@@ -478,6 +683,20 @@ namespace AutoCommand.Services
 
             if (r.Alive && string.Equals(r.Name, "System", StringComparison.OrdinalIgnoreCase))
                 return ("Kernel process", "PID 4 is the Windows kernel process — the root every chain ends at.");
+            if (r.Recycled)
+            {
+                string nowOwns = $"{r.CurrentOwnerName} (started {r.CurrentOwnerCreated:yyyy-MM-dd HH:mm:ss})";
+                if (taskHint != null && !string.IsNullOrEmpty(taskHint.TaskPath))
+                    return ("Scheduled task (PID since recycled)",
+                            $"Launched by scheduled task '{taskHint.TaskPath}'" +
+                            (string.IsNullOrEmpty(taskHint.UserContext) ? "" : $", running as {taskHint.UserContext}") +
+                            $". That process has exited; PID {r.Pid} now belongs to {nowOwns} — an unrelated " +
+                            "process that inherited the recycled PID. Everything below describes the exited subject.");
+                return ("PID recycled (process exited)",
+                        $"The subject has exited and PID {r.Pid} was reused — it now belongs to {nowOwns}, which " +
+                        "is unrelated to the spawn being traced. Identity and chain below describe the exited " +
+                        "subject, reconstructed from recorded create-events.");
+            }
             if (taskHint != null && !string.IsNullOrEmpty(taskHint.TaskPath))
                 return ("Scheduled task",
                         $"Launched by scheduled task '{taskHint.TaskPath}'" +
