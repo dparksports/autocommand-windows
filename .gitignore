@@ -20,3 +20,4 @@ publish/
 
 # telemetry deploy secret (never commit; see telemetry/server/DEPLOY.md)
 telemetry/server/admin-token.txt
+__pycache__/

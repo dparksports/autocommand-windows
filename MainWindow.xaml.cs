@@ -73,6 +73,14 @@ namespace AutoCommand
         private string _currentThreatType;
         private string _currentThreatDetails;
 
+        /// <summary>
+        /// Lets tabs surface a finding on the app-level threat status bar
+        /// (amber text + Review button) through the same path the Security
+        /// Enforcer uses. Currently used by the BITS tab for UPLOAD-type
+        /// jobs (ATT&CK T1197 exfiltration vector).
+        /// </summary>
+        public void RaiseExternalThreat(string type, string details) => OnThreatDetected(type, details);
+
         private void OnThreatDetected(string type, string details)
         {
             Dispatcher.Invoke(() =>

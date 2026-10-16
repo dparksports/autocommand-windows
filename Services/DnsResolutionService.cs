@@ -34,12 +34,23 @@ namespace AutoCommand.Services
         private static readonly string CacheFilePath =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dns_cache.json");
 
+        private static readonly string ForwardCacheFilePath =
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dns_forward_cache.json");
+
+        /// <summary>Forward (hostname→IPs) entries are short-lived: CDN names rotate.</summary>
+        private static readonly TimeSpan ForwardCacheTtl = TimeSpan.FromMinutes(60);
+        private static readonly TimeSpan ForwardNegativeTtl = TimeSpan.FromMinutes(10);
+
         // -----------------------------------------------------------------------
         // Fields
         // -----------------------------------------------------------------------
 
         // ip → (hostname, resolvedAt)
         private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
+
+        // hostname → (ips, resolvedAt) — the BITS tab's "where do they connect"
+        private readonly ConcurrentDictionary<string, ForwardCacheEntry> _forwardCache = new();
+        private readonly SemaphoreSlim _forwardGate = new(1, 1);
 
         // Queue of items waiting for resolution; bounded to avoid runaway growth
         private readonly Channel<IResolvableHost> _queue =
@@ -63,6 +74,7 @@ namespace AutoCommand.Services
         public DnsResolutionService()
         {
             LoadCacheFromDisk();
+            LoadForwardCacheFromDisk();
         }
 
         /// <summary>Starts the background resolution worker.</summary>
@@ -121,7 +133,81 @@ namespace AutoCommand.Services
             _queue.Writer.TryComplete();
             _workerTask?.Wait(TimeSpan.FromSeconds(3));
             SaveCacheToDisk();
+            SaveForwardCacheToDisk();
             _cts.Dispose();
+        }
+
+        // -----------------------------------------------------------------------
+        // Forward resolution (hostname → IPs) — used by the BITS tab to turn
+        // a job's URL host into the IPs it actually connects from. Cached
+        // with a short TTL because CDN names rotate; failed lookups are
+        // negative-cached briefly so a dead resolver can't spin the loop.
+        // -----------------------------------------------------------------------
+
+        public async Task<string[]> ResolveForwardAsync(string host)
+        {
+            if (string.IsNullOrEmpty(host) || IPAddress.TryParse(host, out _)) return new[] { host };
+
+            if (_forwardCache.TryGetValue(host, out var cached) && !cached.IsStale)
+                return cached.Ips;
+
+            await _forwardGate.WaitAsync();
+            try
+            {
+                if (_forwardCache.TryGetValue(host, out var second) && !second.IsStale)
+                    return second.Ips;   // resolved while waiting on the gate
+
+                string[] ips = Array.Empty<string>();
+                try
+                {
+                    var entry = await Dns.GetHostEntryAsync(host);
+                    ips = entry.AddressList
+                        .Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                                 || a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+                        .Select(a => a.ToString())
+                        .Distinct()
+                        .Take(6)
+                        .ToArray();
+                }
+                catch { /* NXDOMAIN / no resolver answer — negative cache below */ }
+
+                _forwardCache[host] = new ForwardCacheEntry(ips, DateTime.UtcNow,
+                    ips.Length == 0 ? ForwardNegativeTtl : ForwardCacheTtl);
+                if (_forwardCache.Count % 10 == 0) SaveForwardCacheToDisk();
+                return ips;
+            }
+            finally { _forwardGate.Release(); }
+        }
+
+        private void LoadForwardCacheFromDisk()
+        {
+            try
+            {
+                if (!File.Exists(ForwardCacheFilePath)) return;
+                var dict = JsonSerializer.Deserialize<Dictionary<string, PersistedForwardEntry>>(
+                    File.ReadAllText(ForwardCacheFilePath));
+                if (dict == null) return;
+                foreach (var kv in dict)
+                {
+                    var entry = new ForwardCacheEntry(kv.Value.I ?? Array.Empty<string>(), kv.Value.T,
+                        kv.Value.I?.Length == 0 ? ForwardNegativeTtl : ForwardCacheTtl);
+                    if (!entry.IsStale) _forwardCache[kv.Key] = entry;
+                }
+            }
+            catch { /* corrupt or missing file — start fresh */ }
+        }
+
+        private void SaveForwardCacheToDisk()
+        {
+            try
+            {
+                var dict = new Dictionary<string, PersistedForwardEntry>(_forwardCache.Count);
+                foreach (var kv in _forwardCache)
+                    dict[kv.Key] = new PersistedForwardEntry { I = kv.Value.Ips, T = kv.Value.ResolvedAt };
+                File.WriteAllText(ForwardCacheFilePath,
+                    JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false }));
+            }
+            catch { /* disk full, permissions — silently skip */ }
         }
 
         // -----------------------------------------------------------------------
@@ -307,6 +393,28 @@ namespace AutoCommand.Services
         {
             public string   H { get; set; } // hostname
             public DateTime T { get; set; } // resolved-at (UTC)
+        }
+
+        private sealed class ForwardCacheEntry
+        {
+            public string[] Ips { get; }
+            public DateTime ResolvedAt { get; }
+            private readonly DateTime _expiresAt;
+
+            public ForwardCacheEntry(string[] ips, DateTime resolvedAt, TimeSpan ttl)
+            {
+                Ips = ips;
+                ResolvedAt = resolvedAt;
+                _expiresAt = resolvedAt + ttl;
+            }
+
+            public bool IsStale => DateTime.UtcNow >= _expiresAt;
+        }
+
+        private sealed class PersistedForwardEntry
+        {
+            public string[]  I { get; set; } // resolved IPs (empty = negative entry)
+            public DateTime  T { get; set; } // resolved-at (UTC)
         }
     }
 }

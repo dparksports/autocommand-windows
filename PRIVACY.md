@@ -39,6 +39,22 @@ removes the settings with it.
 listed in the [Technical Notes](docs/TECHNICAL_NOTES.md) — there is no other
 network sender anywhere in the codebase.
 
+**BITS Transfers tab, spelled out.** It watches what Windows itself records
+about Background Intelligent Transfer jobs (the Bits-Client event log and the
+read-only COM queue) and stores that metadata locally. Two things it does
+touch go one step further, so the rules are explicit:
+
+- **Delivered files are hashed (size + SHA-256) automatically** when a job
+  completes — the same class of local-only metadata Sysmon produces for every
+  binary. No file bytes are kept.
+- **File *content* is shown only when you click "Preview content"** on a
+  specific file — one explicit action per file, rendered in a read-only
+  window, in memory only. Content is never written to disk, never included in
+  any export, and never sent anywhere.
+
+Everything the tab persists (`%LOCALAPPDATA%\AutoCommand\bits\`) is job
+metadata only, in the readable files the Technical Notes list.
+
 Contact: SECURITY.md lists how to reach the maintainer.
 
 © 2026 Dan Park, magicpoint.ai

@@ -8,6 +8,7 @@ Outputs: Assets/autocommand_infographic.png          (hero)
          Assets/process_monitor_infographic.png      (process monitor pipeline)
          Assets/fresh_setup_infographic.png          (one-click setup plan)
          Assets/ai_assistant_infographic.png         (AI assistant)
+         Assets/bits_infographic.png                 (BITS Transfers tab)
 Requires: matplotlib, numpy  (py -m pip install matplotlib numpy)
 """
 import os
@@ -36,7 +37,7 @@ BLUE = "#4FC3F7"
 PURPLE = "#B388FF"
 
 W, H = 1600, 1000
-VERSION = "v2026.10.9"
+VERSION = "v2026.10.17"
 
 
 def new_canvas():
@@ -691,6 +692,100 @@ def why_infographic():
     return out
 
 
+# ============================================================ BITS transfers
+def bits_infographic():
+    fig, ax = new_canvas()
+    header(ax, "AUTOCOMMAND  —  BITS TRANSFERS",
+           "Every Background Intelligent Transfer job  •  where · what · how often · why · content  •  firewall bypass, answered")
+
+    # -- the incident that built the tab ------------------------------------
+    section_title(ax, 44, 168, "THE QUESTION THAT BUILT IT")
+    panel(ax, 40, 180, W - 80, 86, edge=PANEL_EDGE)
+    ax.text(66, 214, "The monitor flagged:  svchost.exe -k netsvcs -p -s BITS   uploaded 294 packets to 34.104.35.123",
+            color=TXT, fontsize=13.8, va="center", fontweight="bold")
+    ax.text(66, 244, "The tab's answer, in one row:  Chrome Component Updater — three download jobs from Google's gvt1.com CDN, "
+                     "creator chrome.exe PID 19716, status 0x0.  Verdict: Normal.",
+            color=SUB, fontsize=12.4, va="center")
+
+    # -- two read-only sources (720-wide panels + a true 80px gutter) --------
+    section_title(ax, 44, 292, "TWO READ-ONLY SOURCES  •  STITCHED BY JOB GUID")
+    sy, sh_ = 304, 148
+    panel(ax, 40, sy, 720, sh_)
+    topbar(ax, 40, sy, 720, CYAN)
+    ax.text(64, sy + 34, "EVENT LOG  —  THE HISTORY", color=CYAN, fontsize=14.5, fontweight="bold", va="center")
+    ax.text(64, sy + 60,
+            "Microsoft-Windows-Bits-Client/Operational, backfilled whole at start:\n"
+            "#3 job created - creating process + PID, owner  ·  #59/#60 start/stop - URL + status\n"
+            "#4 complete - file count.  History survives app restarts.",
+            color=SUB, fontsize=11.2, va="top", linespacing=1.7)
+    ax.text(800, sy + sh_ / 2, "GUID", color=CYAN, fontsize=13, fontweight="bold", ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.45", facecolor=PANEL, edgecolor=CYAN_DIM, lw=1.6))
+    panel(ax, 840, sy, 720, sh_)
+    topbar(ax, 840, sy, 720, GREEN)
+    ax.text(864, sy + 34, "BITS COM QUEUE  —  THE LIVE TRUTH", color=GREEN, fontsize=14.5, fontweight="bold", va="center")
+    ax.text(864, sy + 60,
+            "All users, strictly read-only: hand-declared vtable interop, no PowerShell.\n"
+            "Direction (download vs UPLOAD), live state + byte progress, per-file remote\n"
+            "AND local paths — none of which the event log records.",
+            color=SUB, fontsize=11.2, va="top", linespacing=1.7)
+
+    # -- the five questions ---------------------------------------------------
+    section_title(ax, 44, 478, "EVERY JOB ANSWERS FIVE QUESTIONS")
+    tiles = [
+        ("WHERE", CYAN,
+         "URL host -> resolved IPs\n(cached forward DNS) ->\nowner org: built-in\nMicrosoft / Akamai / Gcore /\nGoogle ranges, RDAP for\nanything unknown."),
+        ("WHAT THEY MOVE", BLUE,
+         "Direction (download vs\nupload), byte progress,\nper-file remote + local\nnames, size + SHA-256 of\neach delivered file on\ncompletion."),
+        ("HOW OFTEN", GREEN,
+         "Patterns view rolls every\ntransfer up per creator ->\nhost: counts, per-day\naverages, and interval\nregularity (beacon CV -\nlow means scheduled)."),
+        ("WHY", PURPLE,
+         "A reason catalog names\nit: Chrome on gvt1, cloud\nfonts, Defender signatures,\nOffice CDN, Windows\nUpdate.  No match ->\n'Unattributed - review'."),
+        ("THE CONTENT", ORANGE,
+         "Hash + size automatic,\nlocal-only (Sysmon-style).\nThe bytes appear ONLY via\nthe per-file Preview click -\nnever stored, exported,\nor sent anywhere."),
+    ]
+    tw, th, tgap = 288, 196, 18
+    ty = 490
+    for i, (name, accent, body) in enumerate(tiles):
+        x = 44 + i * (tw + tgap)
+        panel(ax, x, ty, tw, th)
+        topbar(ax, x, ty, tw, accent)
+        ax.text(x + 18, ty + 32, name, color=accent, fontsize=13.5, fontweight="bold", va="center")
+        ax.text(x + 18, ty + 60, body, color=SUB, fontsize=10.2, va="top", linespacing=1.58)
+        if i < 4:
+            arrow_h(ax, x + tw + 4, x + tw + tgap - 4, ty + th / 2)
+
+    # -- firewall bypass -------------------------------------------------------
+    section_title(ax, 44, 710, "DOES IT BYPASS THE FIREWALL?  —  ANSWERED IN THREE HONEST LAYERS")
+    layers = [
+        ("1. DEFAULT OUTBOUND ACTION", CYAN,
+         "Profile defaults outbound to Allow (the Windows\ndefault)? Then no rule is evaluated at all — bypass\nis the default state, for BITS and all traffic."),
+        ("2. BITS-SCOPED ALLOW RULES", ORANGE,
+         "Under a default-deny, count the exemptions: allow\nrules scoped to the BITS service or svchost.exe.\nRead live via INetFwPolicy2 COM, cached 5 min."),
+        ("3. STRUCTURAL — ALWAYS TRUE", RED,
+         "Transfers execute inside trusted svchost: a block\non the creating process never matches (ATT&CK\nT1197). Blocking BITS breaks Windows Update."),
+    ]
+    lw_, lh, lgap = 489, 136, 22
+    ly = 722
+    for i, (title, accent, body) in enumerate(layers):
+        x = 44 + i * (lw_ + lgap)
+        panel(ax, x, ly, lw_, lh)
+        topbar(ax, x, ly, lw_, accent)
+        ax.text(x + 22, ly + 28, title, color=accent, fontsize=13.5, fontweight="bold", va="center")
+        ax.text(x + 22, ly + 52, body, color=SUB, fontsize=10.6, va="top", linespacing=1.5)
+
+    # -- upload alert strip (its own band, clear of the footer) ---------------
+    panel(ax, 40, 872, W - 80, 38, edge=CYAN_DIM, alpha=0.95)
+    ax.text(W / 2, 891, "UPLOAD-TYPE JOBS:  REVIEW VERDICT  +  APP THREAT STATUS BAR   •   STRICTLY READ-ONLY TOWARD WINDOWS",
+            color=ORANGE, fontsize=12.2, ha="center", va="center", fontweight="bold")
+
+    footer(ax, "BITS DELIVERS WINDOWS UPDATE   •   METADATA ONLY BY DEFAULT   •   CONTENT = EXPLICIT PER-FILE CLICK   •   NOTHING LEAVES THE MACHINE")
+
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bits_infographic.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 if __name__ == "__main__":
     for generate in (
         why_infographic,
@@ -701,5 +796,6 @@ if __name__ == "__main__":
         process_monitor_infographic,
         fresh_setup_infographic,
         ai_assistant_infographic,
+        bits_infographic,
     ):
         print(generate())

@@ -72,6 +72,9 @@
     <Compile Remove="PyTraceSelfTest\**" />
     <Compile Remove="TaskAttributionSelfTest\**" />
     <Compile Remove="OneSettingsCadenceSelfTest\**" />
+    <!-- BITS tracer self-test: drives ParseMessage/Apply/stat/firewall
+         logic offline with synthetic events (see BitsTraceSelfTest\) -->
+    <Compile Remove="BitsTraceSelfTest\**" />
     <!-- Proxy install self-test: drives McpClientRegistration's install
          decision logic with synthetic dirs (see ProxyInstallSelfTest\) -->
     <Compile Remove="ProxyInstallSelfTest\**" />

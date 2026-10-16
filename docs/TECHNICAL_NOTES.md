@@ -154,7 +154,18 @@ Process Monitor, where it can be blocked like any other destination.
 | `<app>\check_interval.txt` | Security Enforcer cadence |
 | `<app>\update_freeze.json` + `freeze_backups\` | Frozen self-updaters and their ACL snapshots |
 | `<app>\telemetry_state.json` | Snapshots of the settings changed by telemetry opt-outs |
+| `<app>\dns_forward_cache.json` | Forward-DNS cache (hostname → IPs) for the BITS tab's "where do they connect"; 60 min TTL, 10 min negative TTL |
 | `%LOCALAPPDATA%\AutoCommand\pytrace\` | Python Spawns tab state — see below |
+| `%LOCALAPPDATA%\AutoCommand\bits\` | BITS Transfers tab state — see below |
+
+### BITS Transfers tab (`%LOCALAPPDATA%\AutoCommand\bits\`)
+
+| File | Purpose |
+|---|---|
+| `jobs.jsonl` | One line per completed BITS job, appended at completion: full metadata (job GUID, creator process + PID, owner account, direction, URL/host/port, resolved IPs, destination owner org, bytes, status, verdict, reason, per-file remote/local names + size + SHA-256). Never file content. |
+| `bits-stats.json` | Per-(creator → host) transfer rollups (counts, upload counts, per-day buckets, first/last seen); flushed at most once a minute when dirty |
+
+Both are plain, readable files. The tab reads Windows' own `Microsoft-Windows-Bits-Client/Operational` event log and enumerates the BITS COM queue read-only (all users, via the elevation the app already has); it never creates, cancels or modifies jobs. File content is read only by the explicit per-file preview window, in memory, and never written anywhere.
 
 ### Python Spawns tab (`%LOCALAPPDATA%\AutoCommand\pytrace\`)
 
