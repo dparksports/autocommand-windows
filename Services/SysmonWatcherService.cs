@@ -206,38 +206,28 @@ namespace AutoCommand.Services
         /// list, ignored IPs, cloud filter, one row per IP); rows surface
         /// through OnNewConnectionTracked exactly like event-driven ones,
         /// so callers on any thread get UI marshaling for free. Returns the
-        /// number of rows seeded. IPv4 only — netstat's IPv6 rows don't
-        /// match the parser, and the live event path covers v6 anyway.
+        /// number of rows seeded. IPv4 only — GetExtendedTcpTable queries
+        /// AF_INET, and the live event path covers v6 anyway. The kernel
+        /// table is enumerated before any per-PID name lookup, so the join
+        /// can never name a PID from data older than the connection rows
+        /// themselves (the netstat-era PID-reuse race).
         /// </summary>
         public int SeedBaseline()
         {
-            string[] lines;
-            try
-            {
-                var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
-                {
-                    CreateNoWindow = true, UseShellExecute = false,
-                    RedirectStandardOutput = true
-                };
-                using var p = Process.Start(psi);
-                string output = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(5000);
-                lines = output.Split('\n');
-            }
+            List<TcpConnectionTable.Row> connections;
+            try { connections = TcpConnectionTable.GetEstablished(); }
             catch { return 0; } // enumeration unavailable — the event path still works
 
             int seeded = 0;
-            foreach (var line in lines)
+            foreach (var c in connections)
             {
-                var m = NetstatEstablishedRe.Match(line);
-                if (!m.Success) continue;
                 try
                 {
-                    string destIp = m.Groups["ip"].Value;
+                    string destIp = c.RemoteIp;
                     if (string.IsNullOrEmpty(destIp) || IsIgnoredIp(destIp)) continue;
                     if (FilterKnownCloudIps && IsKnownCloudIp(destIp)) continue;
 
-                    int pid = int.Parse(m.Groups["pid"].Value);
+                    int pid = c.Pid;
                     string image = TryGetProcessPath(pid);
                     string processName = ResolveProcessName(pid);
                     if (string.IsNullOrEmpty(processName) && !string.IsNullOrEmpty(image))
@@ -285,12 +275,6 @@ namespace AutoCommand.Services
             }
             return seeded;
         }
-
-        // netstat -ano -p TCP: "TCP  local  remote  ESTABLISHED  pid" —
-        // IPv6 remotes ([addr]:port) deliberately don't match
-        private static readonly Regex NetstatEstablishedRe = new(
-            @"^\s*TCP\s+\S+\s+(?<ip>[^:]+):(?<port>\d+)\s+ESTABLISHED\s+(?<pid>\d+)\s*$",
-            RegexOptions.Compiled);
 
         private void Watcher_EventRecordWritten(object sender, EventRecordWrittenEventArgs e)
         {

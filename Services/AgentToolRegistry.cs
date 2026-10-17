@@ -6,7 +6,6 @@ using System.Linq;
 using System.Management;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Threading;
 using SvchostAnalyzer.Core;
 
@@ -32,10 +31,6 @@ namespace AutoCommand.Services
             bool Mutating,
             Func<JsonObject, string> Handler,
             Func<JsonObject, string> ConfirmDetail = null);
-
-        private static readonly Regex NetstatRe = new(
-            @"^\s*TCP\s+(?<local>\S+)\s+(?<remote>\S+)\s+ESTABLISHED\s+(?<pid>\d+)\s*$",
-            RegexOptions.Compiled);
 
         // ── registry access ───────────────────────────────────────────────
 
@@ -165,35 +160,92 @@ namespace AutoCommand.Services
 
         // ── read tool handlers ────────────────────────────────────────────
 
+        // Last snapshot's live (pid → name, start time) pairs, so the next
+        // snapshot can flag a PID whose name changed instead of silently
+        // attaching the new holder's name — the PID-reuse trap.
+        private static readonly object _lastSeenLock = new();
+        private static Dictionary<int, (string Name, DateTime? StartedUtc)> _lastSeen = new();
+
         public static JsonObject BuildMonitorSnapshot()
         {
-            var procs = new Dictionary<int, string>();
+            // Kernel table FIRST, name snapshot second — the join must never
+            // name a PID from data older than the connection table, or a PID
+            // reused in between gets the previous owner's name attached.
+            // GetExtendedTcpTable returns the whole table at one kernel
+            // instant: no child process, no parse, microseconds of skew.
+            var connections = TcpConnectionTable.GetEstablished();
+
+            var procs = new Dictionary<int, (string Name, DateTime? StartedUtc)>();
             try
             {
-                using var s = new ManagementObjectSearcher("SELECT ProcessId, Name FROM Win32_Process");
+                // CreationDate rides along because a bare PID is not an
+                // identity — (pid, start time) is, the same rule the PID
+                // Inquiry enforces against PID recycling.
+                using var s = new ManagementObjectSearcher(
+                    "SELECT ProcessId, Name, CreationDate FROM Win32_Process");
                 foreach (ManagementObject o in s.Get())
-                    procs[Convert.ToInt32(o["ProcessId"])] = o["Name"]?.ToString() ?? "?";
+                {
+                    DateTime? started = null;
+                    try
+                    {
+                        if (o["CreationDate"] is string dmtf && dmtf.Length > 0)
+                            started = ManagementDateTimeConverter.ToDateTime(dmtf).ToUniversalTime();
+                    }
+                    catch { /* some system rows have no readable date — the name still joins */ }
+                    procs[Convert.ToInt32(o["ProcessId"])] = (o["Name"]?.ToString() ?? "?", started);
+                }
             }
-            catch { /* WMI failed — rows will carry PID only */ }
+            catch { /* WMI failed — rows carry PID only */ }
 
+            var seenNow = new Dictionary<int, (string, DateTime?)>();
             var rows = new JsonArray();
-            foreach (var line in NetstatLines())
+            foreach (var c in connections)
             {
-                var m = NetstatRe.Match(line);
-                if (!m.Success) continue;
-                int pid = int.Parse(m.Groups["pid"].Value);
-                if (!procs.TryGetValue(pid, out string name)) name = "?";
+                string name; DateTime? started; string attribution;
+                if (procs.TryGetValue(c.Pid, out var live))
+                {
+                    name = live.Name; started = live.StartedUtc; attribution = "live";
+                    seenNow[c.Pid] = (live.Name, live.StartedUtc);
+                }
+                else
+                {
+                    // The owner exited between the two snapshots. Never
+                    // attach a possibly-reused name: recover the identity
+                    // Sysmon recorded at create time, else say it exited.
+                    string recovered = TryRecoverNameFromSysmon(c.Pid);
+                    if (recovered != null)
+                    {
+                        name = recovered; attribution = "recovered-from-sysmon";
+                    }
+                    else
+                    {
+                        name = "(exited during snapshot)"; attribution = "exited";
+                    }
+                    started = null;
+                }
+
                 var row = new JsonObject
                 {
-                    ["local"] = m.Groups["local"].Value,
-                    ["remote"] = m.Groups["remote"].Value,
-                    ["pid"] = pid,
+                    ["local"] = c.LocalEndPoint,
+                    ["remote"] = c.RemoteEndPoint,
+                    ["pid"] = c.Pid,
                     ["process"] = name,
-                    ["classification"] = Views.SvchostTraceView.Classify(RemoteIpOf(m.Groups["remote"].Value)),
+                    ["classification"] = Views.SvchostTraceView.Classify(c.RemoteIp),
+                    ["attribution"] = attribution,
                 };
+                if (started != null)
+                    row["process_started_utc"] = started.Value.ToString("yyyy-MM-dd HH:mm:ss");
+
+                lock (_lastSeenLock)
+                {
+                    if (_lastSeen.TryGetValue(c.Pid, out var prev) &&
+                        !string.Equals(prev.Name, name, StringComparison.OrdinalIgnoreCase))
+                        row["pid_reused_since_last_snapshot"] = true;
+                }
+
                 if (name.Equals("svchost.exe", StringComparison.OrdinalIgnoreCase))
                 {
-                    var id = SvchostIdentityService.Resolve(pid);
+                    var id = SvchostIdentityService.Resolve(c.Pid);
                     row["svchost"] = new JsonObject
                     {
                         ["services"] = id.ServicesCsv,
@@ -205,7 +257,47 @@ namespace AutoCommand.Services
                 }
                 rows.Add(row);
             }
+            lock (_lastSeenLock) { _lastSeen = seenNow; }
             return new JsonObject { ["type"] = "monitor_snapshot", ["rows"] = rows, ["row_count"] = rows.Count };
+        }
+
+        /// <summary>
+        /// The image name Sysmon recorded when this PID was created, from the
+        /// most recent matching create event in the last hour. The event
+        /// carries the image itself, so PID reuse cannot misattribute — this
+        /// is ground truth, not a lookup against the live process table.
+        /// Null when Sysmon is absent, unreadable (non-elevated session), or
+        /// has no recent event for the PID. Only consulted for rows whose
+        /// owner already exited.
+        /// </summary>
+        private static string TryRecoverNameFromSysmon(int pid)
+        {
+            try
+            {
+                var query = new EventLogQuery("Microsoft-Windows-Sysmon/Operational", PathType.LogName,
+                    $"*[System[EventID=1 and TimeCreated[timediff(@SystemTime) <= 3600000]] " +
+                    $"and EventData[Data[@Name='ProcessId']='{pid}']]");
+                string best = null;
+                DateTime bestTime = DateTime.MinValue;
+                using var reader = new EventLogReader(query);
+                for (var ev = reader.ReadEvent(); ev != null; ev = reader.ReadEvent())
+                using (ev)
+                {
+                    if (ev.TimeCreated is { } t && t > bestTime)
+                    {
+                        // EID 1 property layout: 0 RuleName, 1 UtcTime,
+                        // 2 ProcessGuid, 3 ProcessId, 4 Image, …
+                        var props = ev.Properties;
+                        if (props.Count > 4 && props[4].Value is string img && img.Length > 0)
+                        {
+                            bestTime = t;
+                            best = Path.GetFileName(img);
+                        }
+                    }
+                }
+                return best;
+            }
+            catch { return null; } // not installed / unreadable non-elevated — degrade, never guess
         }
 
 
@@ -273,7 +365,7 @@ namespace AutoCommand.Services
                     if (!string.IsNullOrEmpty(contains) &&
                         !desc.Contains(contains, StringComparison.OrdinalIgnoreCase)) continue;
                     int pid = -1;
-                    try { pid = Convert.ToInt32(ev.Properties[2]?.Value); } catch { }
+                    try { pid = Convert.ToInt32(ev.Properties[3]?.Value); } catch { }
                     string stamp = ev.TimeCreated?.ToLocalTime().ToString("HH:mm:ss") ?? "??";
                     string line = stamp + $"  EID {ev.Id}  PID {pid}  " +
                                   desc.Replace("\r\n", " | ").Replace("\n", " | ").TrimEnd();
@@ -443,19 +535,6 @@ namespace AutoCommand.Services
             }
             catch { return $"Terminate PID {pid}? (process not found — it may have exited; the call will be a no-op)"; }
         }
-
-        private static IEnumerable<string> NetstatLines()
-        {
-            var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
-            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true };
-            using var p = Process.Start(psi);
-            string output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(5000);
-            return output.Split('\n');
-        }
-
-        private static string RemoteIpOf(string remote) =>
-            remote.LastIndexOf(':') is int c && c > 0 ? remote[..c].Trim('[', ']') : remote;
 
         private static string ToJson(JsonObject o) => o.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
     }

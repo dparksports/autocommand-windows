@@ -7,13 +7,13 @@ using System.Management;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using SvchostAnalyzer.Core;
+using AutoCommand.Services;
 
 namespace AutoCommand.Views
 {
@@ -31,8 +31,9 @@ namespace AutoCommand.Views
     /// Pattern detection on top: destination classification (Microsoft /
     /// Akamai / Gcore / unclassified), beacon regularity (coefficient of
     /// variation of connect intervals), respawn loops, upload dominance.
-    /// Polls WMI + netstat at 1s — deliberately non-elevated-friendly; kernel
-    /// ETW (Sysmon) needs admin, this degrades gracefully instead.
+    /// Polls WMI + the kernel TCP table (GetExtendedTcpTable) at 1s —
+    /// deliberately non-elevated-friendly; kernel ETW (Sysmon) needs
+    /// admin, this degrades gracefully instead.
     /// </summary>
     public partial class SvchostTraceView : UserControl
     {
@@ -66,10 +67,6 @@ namespace AutoCommand.Views
         private int _ticks;
         private int _flags;
         private bool _tracing;
-
-        private static readonly Regex NetstatRe = new(
-            @"^\s*TCP\s+\S+\s+(?<ip>[^:]+):(?<port>\d+)\s+ESTABLISHED\s+(?<pid>\d+)\s*$",
-            RegexOptions.Compiled);
 
         public SvchostTraceView()
         {
@@ -181,22 +178,19 @@ namespace AutoCommand.Views
                 _jsonEvents.Add(Json(evt));
             }
 
-            foreach (var line in NetstatLines())
+            foreach (var c in TcpConnectionTable.GetEstablished())
             {
-                var m = NetstatRe.Match(line);
-                if (!m.Success) continue;
-                string ip = m.Groups["ip"].Value;
+                string ip = c.RemoteIp;
                 if (ip.StartsWith("127.") || ip.Contains("::1")) continue;
-                int pid = int.Parse(m.Groups["pid"].Value);
+                int pid = c.Pid;
                 if (!_svcByPid.ContainsKey(pid)) continue;
-                int port = int.Parse(m.Groups["port"].Value);
-                _connOpen[$"{pid}|{ip}:{port}"] = now;
-                _connEvents.Add((now, pid, _svcByPid[pid], ip, port));
+                _connOpen[$"{pid}|{ip}:{c.RemotePort}"] = now;
+                _connEvents.Add((now, pid, _svcByPid[pid], ip, c.RemotePort));
                 if (!_bytes.ContainsKey(pid)) _bytes[pid] = new();
-                AddRow(new TraceRow(now, "connect", pid, _svcByPid[pid], "", $"{ip}:{port}", "already open at trace start"));
+                AddRow(new TraceRow(now, "connect", pid, _svcByPid[pid], "", $"{ip}:{c.RemotePort}", "already open at trace start"));
                 _jsonEvents.Add(Json(new Dictionary<string, object> {
                     ["type"]="connect", ["preexisting"]=true, ["pid"]=pid,
-                    ["services"]=_svcByPid[pid], ["ip"]=ip, ["port"]=port }));
+                    ["services"]=_svcByPid[pid], ["ip"]=ip, ["port"]=c.RemotePort }));
             }
 
             EventsChip.Text = $"events: {_rows.Count}";
@@ -228,26 +222,23 @@ namespace AutoCommand.Views
 
             // connections (established, non-loopback, svchost-owned)
             var cur = new Dictionary<string, bool>();
-            foreach (var line in NetstatLines())
+            foreach (var c in TcpConnectionTable.GetEstablished())
             {
-                var m = NetstatRe.Match(line);
-                if (!m.Success) continue;
-                string ip = m.Groups["ip"].Value;
+                string ip = c.RemoteIp;
                 if (ip.StartsWith("127.") || ip.Contains("::1")) continue;
-                int pid = int.Parse(m.Groups["pid"].Value);
+                int pid = c.Pid;
                 if (!_svcByPid.ContainsKey(pid)) continue;
 
-                string key = $"{pid}|{ip}:{m.Groups["port"].Value}";
+                string key = $"{pid}|{ip}:{c.RemotePort}";
                 cur[key] = true;
                 if (!_connOpen.ContainsKey(key))
                 {
                     _connOpen[key] = now;
-                    int port = int.Parse(m.Groups["port"].Value);
-                    _connEvents.Add((now, pid, _svcByPid[pid], ip, port));
+                    _connEvents.Add((now, pid, _svcByPid[pid], ip, c.RemotePort));
                     if (!_bytes.ContainsKey(pid)) _bytes[pid] = new();
-                    AddRow(new TraceRow(now, "connect", pid, _svcByPid[pid], "", $"{ip}:{port}", $"opened → port {port}"));
+                    AddRow(new TraceRow(now, "connect", pid, _svcByPid[pid], "", $"{ip}:{c.RemotePort}", $"opened → port {c.RemotePort}"));
                     _jsonEvents.Add(Json(new Dictionary<string, object> {
-                        ["type"]="connect", ["pid"]=pid, ["services"]=_svcByPid[pid], ["ip"]=ip, ["port"]=port }));
+                        ["type"]="connect", ["pid"]=pid, ["services"]=_svcByPid[pid], ["ip"]=ip, ["port"]=c.RemotePort }));
                 }
             }
             foreach (var key in _connOpen.Keys.Where(k => !cur.ContainsKey(k)).ToList())
@@ -278,7 +269,7 @@ namespace AutoCommand.Views
         }
 
         /// <summary>
-        /// Poll wrapper: WMI/netstat failures surface in the status line
+        /// Poll wrapper: WMI/TCP-table failures surface in the status line
         /// instead of raising a modal per tick through the app-level
         /// Dispatcher handler. Transient WMI errors recover on retry.
         /// </summary>
@@ -570,19 +561,6 @@ namespace AutoCommand.Views
             foreach (ManagementObject o in searcher.Get())
                 map[Convert.ToInt32(o["ProcessId"])] = o["Name"].ToString();
             return map;
-        }
-
-        private static IEnumerable<string> NetstatLines()
-        {
-            var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
-            {
-                CreateNoWindow = true, UseShellExecute = false,
-                RedirectStandardOutput = true
-            };
-            using var p = Process.Start(psi);
-            string output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(5000);
-            return output.Split('\n');
         }
 
         // ── row + export plumbing ──────────────────────────────────────────

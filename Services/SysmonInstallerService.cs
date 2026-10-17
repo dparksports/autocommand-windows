@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Diagnostics.Eventing.Reader;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -25,6 +26,15 @@ namespace AutoCommand.Services
 
         // Sysmon's ETW provider GUID, used for its event-manifest registration
         private const string SysmonProviderGuid = "{5770385f-c22a-43e0-bf4c-06f5698ffbd9}";
+
+        // The Operational channel defaults to 64 MB. On a busy dev box the
+        // app has measured ~15,000 events/hour — the default wraps in ~4
+        // hours, silently breaking "every spawn retroactively traceable"
+        // for anything older than a lunch break (an overnight incident is
+        // already gone by morning triage). 3× = 192 MB buys roughly half a
+        // day of history at that rate; growing a live channel keeps every
+        // event already in it.
+        public const long ChannelMaxSizeBytes = 192 * 1024 * 1024;
 
         private static readonly string TempDir = Path.Combine(Path.GetTempPath(), "AutoCommand_Sysmon");
         private static readonly string PendingRepairMarker = Path.Combine(TempDir, "repair_pending.flag");
@@ -77,6 +87,7 @@ namespace AutoCommand.Services
                 if (exitCode == 0)
                 {
                     DeletePendingRepairMarker();
+                    EnsureChannelSize();
                     return (true, string.Empty, false);
                 }
 
@@ -124,6 +135,7 @@ namespace AutoCommand.Services
                 if (!IsEventChannelHealthy())
                     return (false, "The Sysmon64 service is installed but its event channel did not register correctly.");
 
+                EnsureChannelSize();
                 return (true, $"Sysmon64 service installed and event channel '{EventChannelName}' is healthy.");
             }
             catch (Exception ex)
@@ -146,7 +158,10 @@ namespace AutoCommand.Services
                 var (output, error, exitCode) = await ProcessRunner.RunWithDetailsAsync(exePath, $"-i \"{configPath}\" -accepteula");
 
                 if (exitCode == 0)
+                {
+                    EnsureChannelSize();
                     return (true, string.Empty);
+                }
                 else
                     return (false, $"Exit code: {exitCode}. Output: {output}. Error: {error}");
             }
@@ -238,6 +253,32 @@ namespace AutoCommand.Services
         {
             var (_, _, exitCode) = ProcessRunner.RunWithDetails("wevtutil.exe", $"gl \"{EventChannelName}\"");
             return exitCode == 0;
+        }
+
+        /// <summary>
+        /// Raises the Sysmon Operational channel's max size to
+        /// ChannelMaxSizeBytes (3× the 64 MB default) so the forensic
+        /// history survives more than a few hours on an active machine.
+        /// Best-effort: SaveChanges needs elevation; false just means the
+        /// default (shorter) retention stands — it never fails an install.
+        /// Called after every successful install/repair/verify and from the
+        /// startup diagnostics pass for machines where Sysmon predates this.
+        /// </summary>
+        public static bool EnsureChannelSize()
+        {
+            try
+            {
+                var config = new EventLogConfiguration(EventChannelName);
+                if (config.MaximumSizeInBytes >= ChannelMaxSizeBytes) return true;
+                config.MaximumSizeInBytes = ChannelMaxSizeBytes;
+                config.SaveChanges();
+                return true;
+            }
+            catch
+            {
+                // Channel missing, or session not elevated — degrade, never guess
+                return false;
+            }
         }
 
         /// <summary>

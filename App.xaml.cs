@@ -68,6 +68,13 @@ namespace AutoCommand
             // Finish a Sysmon repair that was waiting for a Windows restart
             FinishSysmonRepairIfPending();
 
+            // Grow the Sysmon channel to its sized retention on machines
+            // where Sysmon predates the sizing — the 64 MB default wraps in
+            // ~4 h on an active box, which silently shorts the forensic
+            // history the PID Inquiry promises. No-op when already sized,
+            // not installed, or the session is not elevated.
+            EnsureSysmonChannelSized();
+
             RemoveLegacyAnalyticsRegistryValues();
 
             // Telemetry sinkhole: when hosts pins point at 127.0.0.1 (sinkhole
@@ -175,6 +182,26 @@ namespace AutoCommand
             catch (System.Exception ex)
             {
                 LogCrash(ex, "SysmonRepair");
+            }
+        }
+
+        // Off the UI thread: DetectInstallState probes sc.exe/wevtutil, and
+        // resizing the channel must never stall startup.
+        private async void EnsureSysmonChannelSized()
+        {
+            try
+            {
+                await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var installer = new Services.SysmonInstallerService();
+                    if (installer.DetectInstallState() != Services.SysmonInstallState.Installed)
+                        return; // nothing installed — the install path sizes it
+                    Services.SysmonInstallerService.EnsureChannelSize();
+                });
+            }
+            catch (System.Exception ex)
+            {
+                LogCrash(ex, "SysmonChannelSize");
             }
         }
 
