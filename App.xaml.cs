@@ -73,7 +73,12 @@ namespace AutoCommand
             // ~4 h on an active box, which silently shorts the forensic
             // history the PID Inquiry promises. No-op when already sized,
             // not installed, or the session is not elevated.
-            EnsureSysmonChannelSized();
+            //
+            // Then the Sysmon archive: prune past retention, backfill
+            // everything the live channel still holds, and follow it live.
+            // The channel is a rolling window; the archive is what makes
+            // "every spawn retroactively traceable" true for weeks.
+            PrepareSysmonAtStartup();
 
             RemoveLegacyAnalyticsRegistryValues();
 
@@ -185,9 +190,10 @@ namespace AutoCommand
             }
         }
 
-        // Off the UI thread: DetectInstallState probes sc.exe/wevtutil, and
-        // resizing the channel must never stall startup.
-        private async void EnsureSysmonChannelSized()
+        // Off the UI thread: DetectInstallState probes sc.exe/wevtutil, the
+        // backfill can scan the whole retained channel, and none of it must
+        // stall startup. Every step degrades silently when unelevated.
+        private async void PrepareSysmonAtStartup()
         {
             try
             {
@@ -195,13 +201,16 @@ namespace AutoCommand
                 {
                     var installer = new Services.SysmonInstallerService();
                     if (installer.DetectInstallState() != Services.SysmonInstallState.Installed)
-                        return; // nothing installed — the install path sizes it
+                        return; // nothing installed — the install path sizes and archives it
                     Services.SysmonInstallerService.EnsureChannelSize();
+                    Services.SysmonArchiveService.Prune();
+                    Services.SysmonArchiveService.Backfill();
+                    Services.SysmonArchiveService.StartLiveWatch();
                 });
             }
             catch (System.Exception ex)
             {
-                LogCrash(ex, "SysmonChannelSize");
+                LogCrash(ex, "SysmonStartup");
             }
         }
 

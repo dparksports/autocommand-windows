@@ -470,25 +470,12 @@ namespace AutoCommand.Services
         // IP filtering helpers
         // -----------------------------------------------------------------------
 
-        private static bool IsIgnoredIp(string ipStr)
-        {
-            if (ipStr.StartsWith("127.") || ipStr == "::1") return true;
-            if (ipStr.StartsWith("192.168.") || ipStr.StartsWith("10.")) return true;
-            if (ipStr == "255.255.255.255") return true;
-
-            var parts = ipStr.Split('.');
-            if (parts.Length == 4)
-            {
-                if (parts[0] == "172" && int.TryParse(parts[1], out int p2) && p2 >= 16 && p2 <= 31)
-                    return true;
-
-                // Multicast 224.0.0.0 - 239.255.255.255
-                if (int.TryParse(parts[0], out int p1) && p1 >= 224 && p1 <= 239)
-                    return true;
-            }
-
-            return false;
-        }
+        private static bool IsIgnoredIp(string ipStr) =>
+            // Shared with the sampled paths: loopback / link-local / ULA /
+            // multicast / broadcast for BOTH families. IPv6 events used to
+            // slip past this with only a literal "::1" check, seeding
+            // link-local and ULA destinations as if they were internet rows.
+            TcpConnectionTable.IsLocalOrNonRoutable(ipStr);
 
         private static readonly IPNetwork[] KnownCidrBlocks = {
             new IPNetwork(IPAddress.Parse("20.0.0.0"), 8),

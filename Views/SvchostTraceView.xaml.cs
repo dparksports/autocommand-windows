@@ -181,7 +181,7 @@ namespace AutoCommand.Views
             foreach (var c in TcpConnectionTable.GetEstablished())
             {
                 string ip = c.RemoteIp;
-                if (ip.StartsWith("127.") || ip.Contains("::1")) continue;
+                if (ip.StartsWith("127.") || ip == "::1") continue; // loopback only — this tab traces LAN too
                 int pid = c.Pid;
                 if (!_svcByPid.ContainsKey(pid)) continue;
                 _connOpen[$"{pid}|{ip}:{c.RemotePort}"] = now;
@@ -225,7 +225,7 @@ namespace AutoCommand.Views
             foreach (var c in TcpConnectionTable.GetEstablished())
             {
                 string ip = c.RemoteIp;
-                if (ip.StartsWith("127.") || ip.Contains("::1")) continue;
+                if (ip.StartsWith("127.") || ip == "::1") continue; // loopback only — this tab traces LAN too
                 int pid = c.Pid;
                 if (!_svcByPid.ContainsKey(pid)) continue;
 

@@ -73,6 +73,10 @@ namespace AutoCommand.Views
             ServiceText.Text = $"Service: {(info.State == SysmonInstallState.NotInstalled ? "—" : info.ServiceRunning ? "Running" : "Stopped")}";
             ChannelText.Text = $"Event channel: {(info.State == SysmonInstallState.NotInstalled ? "—" : info.ChannelHealthy ? "Healthy" : "Unreadable")}";
             EventsText.Text = $"Events (24h): {(info.State == SysmonInstallState.NotInstalled ? "—" : info.EventsLast24h.ToString("N0"))}";
+            var (archiveDays, archiveEvents) = Services.SysmonArchiveService.StatusSummary();
+            ArchiveText.Text = archiveEvents > 0
+                ? $"Archive: {archiveEvents.ToString("N0")} events · {archiveDays} day file(s) · {Services.SysmonArchiveService.DefaultRetainDays}-day retention"
+                : "Archive: not started yet (fills at the next elevated start)";
             NewestText.Text = $"Newest event: {info.NewestEventTime?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—"}";
             HashText.Text = $"Config hash: {info.ConfigHash ?? "—"}";
 

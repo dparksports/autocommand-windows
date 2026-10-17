@@ -2,52 +2,55 @@
 
 ![AutoCommand](Assets/corp_banner.png?v=fluent2)
 
-**Your antivirus says "No threats found." Your computer still feels wrong anyway.**
+**Tired of antivirus software? Nagging popups, yearly subscriptions, scans that finish with "no threats found" — and still no answer when your computer acts weird?**
 
-Antivirus programs can only catch things they already know about — like a guard dog matching faces against a book of wanted posters. When nothing matches, they say "no threats found" and go back to sleep. But that answer doesn't help with the questions you actually have at 11 p.m.: *what is this program? why is my fan spinning? who is my computer talking to right now?*
-
-This free, open-source app answers those questions in plain English. It shows you every program on your Windows PC that's talking to the internet, names each one ("Chrome's updater, downloading from Google"), explains the strange ones before you worry — and stops anything you don't want, with one click and an undo button.
+You don't need another guard dog. You need to *see what's going on*. AutoCommand is a free, open-source app that shows you every program on your PC that's talking to the internet, explains each one in plain English, and stops anything you don't want — one click, undo included. It sends nothing anywhere, costs nothing, and you can delete it when you're done.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-## What do I do?
+## Try it in five minutes
 
-1. **Download** the app from [Releases](../../releases) — `AutoCommand-v…-win-x64.zip` for Windows 10 or 11. Unzip it.
-2. **Run `AutoCommand.exe` as Administrator** (right-click → *Run as administrator* — it needs permission because it watches the whole machine, not just your files). The list you see first is every program currently talking to the internet, each row named in plain words.
-3. **Ask about anything that looks odd.** Type your question the way you'd say it out loud — *"what is this? should I worry?"* — and the built-in helper investigates and answers in plain words. If you decide you don't like something, the same window has a **Block** button.
+![Try it in five minutes](Assets/first_five_minutes_infographic.png?v=oss2)
 
-That's it. Watch, ask, block.
+1. **Download** `AutoCommand-v…-win-x64.zip` from [Releases](../../releases) and unzip it anywhere. There's no installer.
+2. **Right-click `AutoCommand.exe` → Run as administrator.** (That permission lets it watch the whole machine — the same reason Task Manager asks.) The first screen lists every program talking to the internet right now.
+3. **Look around, ask something.** Click any row to see who started it. Or ask the built-in helper a question the way you'd say it — *"what is this? should I worry?"* — and get a plain-English answer.
 
-![Three steps](Assets/plain_english_infographic.png?v=oss1)
+That's the whole tutorial. Looking changes nothing; deleting the folder uninstalls it completely.
 
-> **One thing to know:** AutoCommand is not a second antivirus, and you don't have to remove yours. Antivirus scans files; AutoCommand shows you what's *happening* — the visibility your antivirus never gives you. They do different jobs, and this is the missing one.
+> **Windows may show a blue "protected your PC" screen** because the app isn't from a big company. Click **More info → Run anyway**. It's open source — anyone can read exactly what it does, and that's rather the point.
 
-## Why can't my antivirus answer these questions?
+## What am I looking at?
 
-![Why your antivirus can't help](Assets/oss_alternative_infographic.png?v=oss1)
+![How to read one row](Assets/row_anatomy_infographic.png?v=oss2)
 
-Because scanning and understanding are different jobs. A scanner compares files against a list of known bad ones; it has nothing to say about a perfectly "clean" program that's phoning home more than it should, or a Windows part doing something unusual. AutoCommand watches behavior and explains it — and it remembers what it saw, so yesterday's mystery is still solvable tomorrow.
+The main screen is a list of rows — one per connection. Every row tells you who's talking, to whom, how much, for how long, and gives you a Block button (with an undo, and a panic button that restores everything). When a row surprises you, *that's* the moment to click it or ask the helper — not before. Most rows, you'll never need to think about.
+
+## When something looks odd
+
+![See it, ask, stop it](Assets/plain_english_infographic.png?v=oss2)
+
+Real example, from this app's own development machine: *"svchost.exe is uploading packets"* sounds alarming — it turned out to be Chrome's updater downloading from Google's own servers, and AutoCommand proved it in one row. No panic, no reinstall, no forum archaeology at midnight.
+
+## Why this instead of another antivirus?
+
+![Why your antivirus can't help](Assets/oss_alternative_infographic.png?v=oss2)
+
+Keep your antivirus if you like it — this isn't a replacement, and you don't have to uninstall anything. It's the piece antivirus never gives you: **visibility**. A scanner matches files against a list of known bad ones; it has nothing to say about a "clean" program phoning home more than it should. AutoCommand watches behavior, names it in plain words, remembers what it saw (so yesterday's mystery is still solvable tomorrow), and never asks for a subscription, an account, or your credit card.
 
 ## Common questions
 
 | What you see | What to do |
 |---|---|
-| "A program I don't recognize is on the list" | Most are normal Windows parts doing their jobs. Double-click the row — AutoCommand shows who started it, where it's connecting, and whether that's usual. Still unsure? Ask the helper. |
-| "svchost.exe is sending data and I've heard that's bad" | It's Windows' own delivery service. AutoCommand shows exactly what it delivered and from where — usually an update from Google, Microsoft, or your browser maker. Real case: "svchost uploading packets" turned out to be Chrome's updater on Google's download servers, proven in one row. |
-| "It asked for Administrator permission" | That's how it can see system processes and other users' programs, not just yours. It never does anything with that permission without asking you first. |
-| "Should I get rid of my antivirus?" | No need — keep it for scanning. AutoCommand is the other half: it shows and explains what's happening live. |
-| "What does it send about me?" | Nothing, by default. Everything happens on your computer. (The one optional extra — an anonymous usage count, no identifiers at all — is off unless you say yes, and you can turn it off anytime.) |
-| "I blocked something and the internet broke" | Breathe. The 🚑 **Restore Internet** button in the corner turns off every block AutoCommand made, in one click. |
-
-## When in doubt
-
-**Look, ask, then block — in that order.** Every block is reversible, and AutoCommand warns you before touching anything Windows needs. The dangerous move was always the confident guess; this app exists so you never need one.
+| "A program I don't recognize is on the list" | Most are normal Windows parts. Double-click the row — it shows who started it and where it connects. Still unsure? Ask the helper. |
+| "It asked for Administrator permission" | That's how it sees system processes, not just yours. It never uses that permission without asking you first. |
+| "Should I remove my antivirus?" | Your call — they do different jobs. AutoCommand shows what's happening; antivirus scans files. Many people run both. |
+| "What does it send about me?" | Nothing, by default. Everything happens on your computer. (The one optional extra — an anonymous usage count, no identifiers at all — is off unless you say yes.) |
+| "I blocked something and the internet broke" | Breathe. The 🚑 **Restore Internet** button in the corner undoes every block AutoCommand made, in one click. |
 
 ## What else is inside
 
-The same plain-English treatment across a few more windows: a **"phone bill"** view of who talks to whom and how much, **one-click firewall presets**, a tab that shows **what Windows delivered and updated overnight**, a **telemetry opt-out** section that proves apps actually honored your "stop sending data" setting — and the same honest rule everywhere: *nothing runs without you, nothing is guessed, and everything it remembers is a readable file on your own disk.*
-
-The complete list — every tab, every technical detail, every known limitation — is documented in plain sight in the [Technical Notes](docs/TECHNICAL_NOTES.md).
+The same plain-English treatment across a few more windows: a **"phone bill"** view of who talks to whom and how much, **one-click firewall presets**, a tab showing **what Windows delivered and updated overnight**, and a **telemetry opt-out** section that proves apps actually honored your "stop sending data" setting. One rule everywhere: *nothing runs without you, nothing is guessed, and everything it remembers is a readable file on your own disk.* The complete, honest list — including every limitation — is in the [Technical Notes](docs/TECHNICAL_NOTES.md).
 
 > **🔧 Setting up a new PC instead?** The first-hour ritual — debloat, firewall presets, privacy opt-outs — lives in its own app: [**Shields Up**](https://github.com/dparksports/shields-up/releases/latest) (same author, same undo-first design).
 
@@ -55,9 +58,7 @@ The complete list — every tab, every technical detail, every known limitation 
 
 | File | For |
 |---|---|
-| `AutoCommand-v…-win-x64.zip` | Windows 10 and 11 — unzip anywhere, right-click `AutoCommand.exe` → **Run as administrator**. No installer, nothing else to install. |
-
-**Windows note:** Windows may show a blue "protected your PC" screen because the app isn't from a big company. Click **More info → Run anyway**. (The app is open source — anyone can read exactly what it does, and that's rather the point.)
+| `AutoCommand-v…-win-x64.zip` | Windows 10 and 11 — unzip anywhere, right-click `AutoCommand.exe` → **Run as administrator**. Nothing else to install. |
 
 ## Your privacy, in one sentence
 
@@ -75,7 +76,7 @@ dotnet build AutoCommand.csproj -c Release
 dotnet publish AutoCommand.csproj -c Release -r win-x64 --self-contained
 ```
 
-How it all actually works — the IP Helper connection table, Sysmon, the svchost decoder, the AI-assistant consent model, every engine's offline self-test — is documented in **[TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md)**. Apache 2.0.
+How it actually works — the dual-family kernel connection table, the Sysmon archive, the svchost decoder, the AI-assistant consent model, every engine's offline self-test — is documented in **[TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md)**. Apache 2.0.
 
 ## Credits & license
 

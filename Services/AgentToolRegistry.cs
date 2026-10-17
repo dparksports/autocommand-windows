@@ -38,7 +38,7 @@ namespace AutoCommand.Services
         {
             new Tool(
                 "get_monitor_rows",
-                "Live snapshot of every established outbound TCP connection on the machine, " +
+                "Live snapshot of every established outbound TCP connection on the machine (IPv4 and IPv6), " +
                 "attributed to its process — svchost instances decoded to their hosted service " +
                 "(SCM ground truth + -k/-s command-line tokens) and each destination classified " +
                 "(Microsoft/Azure, Akamai, Gcore, unclassified). Same view as AutoCommand's Process Monitor.",
@@ -66,11 +66,15 @@ namespace AutoCommand.Services
             new Tool(
                 "tail_sysmon",
                 "Recent events from the Sysmon/Operational log (process creates, network connections, " +
-                "process terminates). Needs the elevated app; returns a clear note when unreadable.",
+                "process terminates). Needs the elevated app; returns a clear note when unreadable. " +
+                "With archive=true: reads the app's Sysmon archive instead — every event backfilled or " +
+                "watched since the archive began (default 30 days), including events that already " +
+                "wrapped out of the rolling live channel.",
                 Schema(("minutes", "Look this many minutes back (default 30)", false),
                        ("eid", "Filter to one Sysmon event ID (e.g. 1=process create, 3=network)", false),
                        ("contains", "Only events whose description contains this text (case-insensitive)", false),
-                       ("max", "Maximum events to return (default 50, cap 500)", false)),
+                       ("max", "Maximum events to return (default 50, cap 500)", false),
+                       ("archive", "true = query the app's Sysmon archive instead of the live log", false)),
                 false,
                 a => TailSysmon(a)),
 
@@ -346,6 +350,28 @@ namespace AutoCommand.Services
             int? eid = a["eid"] is JsonNode e ? e.GetValue<int>() : null;
             string contains = a["contains"]?.GetValue<string>();
             int max = Math.Clamp(a["max"]?.GetValue<int>() ?? 50, 1, 500);
+            bool archive = a["archive"] is JsonNode ab && ab.GetValue<bool>();
+
+            if (archive)
+            {
+                var events = SysmonArchiveService.Search(eid, contains, DateTime.UtcNow.AddMinutes(-minutes), max);
+                if (events.Count == 0)
+                    return $"No matching events in the Sysmon archive (last {minutes} min). " +
+                           "The archive fills at every elevated app start (backfill) and while the app runs.";
+                var sb2 = new StringBuilder();
+                foreach (var ev in events)
+                {
+                    string stamp = ev.TsUtc.ToLocalTime().ToString("HH:mm:ss");
+                    string pid = ev.Data.GetValueOrDefault("ProcessId", "");
+                    string img = ev.Data.GetValueOrDefault("Image", "");
+                    string cmd = ev.Data.GetValueOrDefault("CommandLine", "");
+                    string line = $"{stamp}  EID {ev.Eid}  PID {pid}  {img}" +
+                                  (cmd.Length > 0 ? $" | {cmd}" : "");
+                    if (line.Length > 400) line = line[..400] + "…";
+                    sb2.AppendLine(line);
+                }
+                return sb2.ToString();
+            }
 
             try
             {
@@ -504,9 +530,10 @@ namespace AutoCommand.Services
             foreach (var (name, desc, req) in props)
             {
                 bool isInt = name is "pid" or "minutes" or "eid" or "max" or "seconds";
+                bool isBool = name is "archive";
                 properties[name] = new JsonObject
                 {
-                    ["type"] = isInt ? "integer" : "string",
+                    ["type"] = isBool ? "boolean" : isInt ? "integer" : "string",
                     ["description"] = desc,
                 };
                 if (req) required.Add(name);

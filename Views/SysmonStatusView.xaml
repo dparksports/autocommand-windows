@@ -26,6 +26,7 @@
                         <TextBlock x:Name="ServiceText"  Text="Service: —"      Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <TextBlock x:Name="ChannelText"  Text="Event channel: —" Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <TextBlock x:Name="EventsText"   Text="Events (24h): —" Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
+                        <TextBlock x:Name="ArchiveText"  Text="Archive: —"       Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <TextBlock x:Name="NewestText"   Text="Newest event: —" Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
                         <TextBlock x:Name="HashText"     Text="Config hash: —"  Margin="0,2,24,2" Foreground="{DynamicResource TextSecondaryBrush}"/>
                     </WrapPanel>

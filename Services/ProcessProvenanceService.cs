@@ -381,6 +381,19 @@ namespace AutoCommand.Services
                     }
                 }
 
+                // The live channel is a rolling window — an old spawn can
+                // have wrapped out of it. The app's Sysmon archive holds
+                // every event it ever backfilled or watched, so fall back to
+                // it before declaring ancestry unrecoverable. Same record
+                // shape, same preference rules below.
+                bool fromArchive = false;
+                if (records.Count == 0)
+                {
+                    foreach (var a in AutoCommand.Services.SysmonArchiveService.SearchCreateEvents(r.Pid, 5))
+                        records.Add((a.Data, (DateTime?)a.TsUtc));
+                    fromArchive = records.Count > 0;
+                }
+
                 (Dictionary<string, string> Fields, DateTime? Utc) best = default;
                 int bestScore = -1;
                 DateTime? windowUtc = hintSeenUtc?.ToUniversalTime();
@@ -432,7 +445,9 @@ namespace AutoCommand.Services
                     detail += $"\r\n      parent command line: {pcl}";
                 r.Evidence.Add(new EvidenceItem
                 {
-                    Source = "Sysmon create-event (EID 1)",
+                    Source = fromArchive
+                        ? "Sysmon archive create-event (EID 1) — wrapped out of the live log"
+                        : "Sysmon create-event (EID 1)",
                     Detail = detail
                 });
             }

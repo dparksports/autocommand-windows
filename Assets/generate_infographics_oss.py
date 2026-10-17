@@ -1,4 +1,5 @@
-"""Generate the plain-language "open-source alternative" infographics.
+"""Generate the plain-language infographics for people trying AutoCommand
+because they are tired of antivirus software.
 
 Same house style as generate_infographics.py (dark cyber theme, matplotlib)
 but sized for non-technical readers: bigger type throughout (body 17-19pt,
@@ -7,8 +8,10 @@ Lines are pre-wrapped by hand: matplotlib does not wrap text, and the exact
 line counts are what the vertical layout is measured against.
 
 Usage:  py Assets/generate_infographics_oss.py
-Outputs: Assets/oss_alternative_infographic.png   (antivirus vs AutoCommand)
-         Assets/plain_english_infographic.png     (see it / ask / stop it)
+Outputs: Assets/oss_alternative_infographic.png    (antivirus vs AutoCommand)
+         Assets/plain_english_infographic.png      (see it / ask / stop it)
+         Assets/first_five_minutes_infographic.png (getting started)
+         Assets/row_anatomy_infographic.png        (how to read one row)
 Requires: matplotlib, numpy  (py -m pip install matplotlib numpy)
 """
 import os
@@ -34,7 +37,7 @@ ORANGE = "#FFAE42"
 GREEN = "#3DDC84"
 
 W, H = 1600, 1000
-VERSION = "v2026.10.17.1"
+VERSION = "v2026.10.17.2"
 OUT = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -204,10 +207,10 @@ def plain_english():
         x = x0 + i * (pw + gap)
         panel(ax, x, 210, pw, 470, edge=CYAN_DIM, lw=2.2)
         topbar(ax, x, 210, pw, accent)
-        ax.text(x + pw / 2, 282, num, color=accent, fontsize=44, fontweight="bold",
+        ax.text(x + pw / 2, 272, num, color=accent, fontsize=40, fontweight="bold",
                 ha="center", va="center",
-                bbox=dict(boxstyle="circle,pad=0.35", facecolor=PANEL, edgecolor=accent, lw=2.6))
-        ax.text(x + pw / 2, 352, title, color=TXT, fontsize=23, fontweight="bold",
+                bbox=dict(boxstyle="circle,pad=0.3", facecolor=PANEL, edgecolor=accent, lw=2.6))
+        ax.text(x + pw / 2, 362, title, color=TXT, fontsize=23, fontweight="bold",
                 ha="center", va="center")
         yy = 400
         first = True
@@ -232,7 +235,125 @@ def plain_english():
     plt.close(fig)
 
 
+# ============================================================ 3: first five minutes
+def first_five_minutes():
+    fig, ax = new_canvas()
+    header(ax, "AUTOCOMMAND  •  FREE & OPEN SOURCE",
+           "Try it in five minutes.",
+           "No installer, no account, no obligation — look around and see what your PC is doing.")
+
+    steps = [
+        ("1", "OPEN IT", CYAN, [
+            "Download the zip and unzip it",
+            "anywhere — no installer.",
+            "",
+            "Right-click AutoCommand.exe →",
+            "Run as administrator.",
+            "",
+            "(That lets it see the whole",
+            "machine, not just your files.)",
+        ]),
+        ("2", "LOOK AROUND", ORANGE, [
+            "The first screen lists every",
+            "program talking to the",
+            "internet right now — most are",
+            "ordinary Windows parts.",
+            "",
+            "Click any row to see who",
+            "started it and where it goes.",
+            "Looking changes nothing.",
+        ]),
+        ("3", "ASK SOMETHING", GREEN, [
+            "See a name you don't know?",
+            "",
+            "Ask the built-in helper,",
+            "like you'd ask a person:",
+            "“What is this? Should I worry?”",
+            "",
+            "You get a plain-English answer",
+            "— and a Block button.",
+        ]),
+    ]
+
+    pw, gap = 474, 34
+    x0 = (W - (3 * pw + 2 * gap)) / 2
+    for i, (num, title, accent, lines) in enumerate(steps):
+        x = x0 + i * (pw + gap)
+        panel(ax, x, 210, pw, 470, edge=CYAN_DIM, lw=2.2)
+        topbar(ax, x, 210, pw, accent)
+        ax.text(x + pw / 2, 272, num, color=accent, fontsize=40, fontweight="bold",
+                ha="center", va="center",
+                bbox=dict(boxstyle="circle,pad=0.3", facecolor=PANEL, edgecolor=accent, lw=2.6))
+        ax.text(x + pw / 2, 362, title, color=TXT, fontsize=23, fontweight="bold",
+                ha="center", va="center")
+        yy = 400
+        first = True
+        for seg in lines:
+            if seg:
+                ax.text(x + pw / 2, yy, seg, color=TXT if first else SUB,
+                        fontsize=17, ha="center", va="center")
+                first = False
+            yy += 33
+        if i < 2:
+            ax.annotate("", xy=(x + pw + gap - 5, 440), xytext=(x + pw + 5, 440),
+                        arrowprops=dict(arrowstyle="-|>", color=CYAN_DIM, lw=3.0))
+
+    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
+    ax.text(W / 2, 772, "If you can use a web browser, you can use this.",
+            color=TXT, fontsize=19, ha="center", va="center", fontweight="bold")
+    ax.text(W / 2, 822, "No installer, no account, no subscription — and deleting the folder uninstalls it completely.",
+            color=SUB, fontsize=17.5, ha="center", va="center")
+
+    footer(ax, "Free forever · open source · nothing you do ever leaves your computer.")
+    fig.savefig(os.path.join(OUT, "first_five_minutes_infographic.png"), dpi=150)
+    plt.close(fig)
+
+
+# ============================================================ 4: how to read one row
+def row_anatomy():
+    fig, ax = new_canvas()
+    header(ax, "AUTOCOMMAND  •  WHAT AM I LOOKING AT?",
+           "One row, five things to know.",
+           "The main screen is a list of rows like this one — here's how to read it.")
+
+    panel(ax, 40, 210, W - 80, 470, edge=CYAN_DIM, lw=2.2)
+    topbar(ax, 40, 210, W - 80, CYAN)
+
+    rows_ = [
+        ("WHO", "chrome.exe — the program's name",
+         "Most are Windows parts or apps you already know. The odd ones are the interesting ones."),
+        ("WHERE", "→ Google · United States — who's on the other end",
+         "AutoCommand turns numbers like 47.246.23.183 into a company name you recognize, when it can."),
+        ("HOW MUCH", "↓ 12 MB received, ↑ 340 KB sent",
+         "A few kilobytes is a heartbeat. Gigabytes are worth a second look."),
+        ("HOW LONG", "Connected since 2:14 PM — dead programs are marked “exited”",
+         "And it remembers what it saw: yesterday's mystery is still solvable tomorrow."),
+        ("BUTTONS", "Block — one click stops it. Undo puts it back.",
+         "Windows needs some of these, so it warns you first — and a panic button restores everything."),
+    ]
+
+    y = 268
+    for label, example, explain in rows_:
+        chip(ax, 84, y + 15, label, size=15)
+        ax.text(270, y, example, color=TXT, fontsize=17.5, va="center", fontweight="bold")
+        ax.text(270, y + 32, explain, color=SUB, fontsize=16, va="center")
+        y += 84
+
+    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
+    ax.text(W / 2, 772, "When a row surprises you, that's the moment to click it or ask the helper — not before.",
+            color=TXT, fontsize=19, ha="center", va="center", fontweight="bold")
+    ax.text(W / 2, 822, "You don't have to understand every row. Most people never need to.",
+            color=SUB, fontsize=17.5, ha="center", va="center")
+
+    footer(ax, "Every label on this screen is something the app actually shows you — no guessing.")
+    fig.savefig(os.path.join(OUT, "row_anatomy_infographic.png"), dpi=150)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     oss_alternative()
     plain_english()
-    print("wrote oss_alternative_infographic.png, plain_english_infographic.png")
+    first_five_minutes()
+    row_anatomy()
+    print("wrote oss_alternative_infographic.png, plain_english_infographic.png, "
+          "first_five_minutes_infographic.png, row_anatomy_infographic.png")
