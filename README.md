@@ -63,7 +63,7 @@ Maybe you've already asked ChatGPT or Claude about a weird-sounding program — 
 - **Nothing is touched without your yes.** Looking is all it can do unless you also switch on actions — and even then, every block, stop, or change shows the same confirmation box you'd see if you'd clicked it yourself. It can suggest; you decide.
 - **You see every question it asked.** The tab keeps a plain-English list of every request and answer, for as long as the visit lasts.
 
-The door only opens for assistants that speak a standard connection language called **MCP** — Claude Desktop and other MCP-capable assistants qualify. If yours doesn't, nothing happens and nothing is lost: AutoCommand works exactly the same with the door shut.
+The door only opens for assistants that speak a standard connection language called **MCP** — Claude Desktop, ZCode, AutoClaw, Gemini Antigravity, Cursor, Windsurf and VS Code all qualify, and so does any other MCP-capable desktop client. The Be My Guest tab offers one-click registration for the clients it finds on your PC; for anything else, **Copy MCP config** gives you the entry to paste by hand. And if your assistant doesn't speak MCP at all, nothing happens and nothing is lost: AutoCommand works exactly the same with the door shut.
 
 One honest line about privacy, because you'd wonder: AutoCommand itself still talks to no one. It hands facts to your assistant's own app on your own PC — and where that app sends them is the trust you already chose when you picked it. Prefer it saw nothing? Leave the door closed. You lose nothing.
 
