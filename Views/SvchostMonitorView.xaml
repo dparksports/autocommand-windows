@@ -97,6 +97,13 @@
                                 <Button Content="Unblock Selected" Click="UnblockBtn_Click" Margin="0,8,0,0" Padding="12,2" HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
                                 <Button Content="🛠 Manage all (grouped, classified, bulk actions)…" Click="ManageBlockedBtn_Click" Margin="0,6,0,0" Padding="4,2" HorizontalAlignment="Left"
                                         Background="Transparent" Foreground="#7EB8F7" BorderThickness="0" Cursor="Hand"/>
+                                <Separator Margin="0,8,0,4"/>
+                                <!-- 'Don't ask again' state: visible + reversible, not a hidden cookie -->
+                                <TextBlock x:Name="SuppressedPromptsText" Text="All confirmation prompts active"
+                                           Foreground="{DynamicResource TextSecondaryBrush}" FontSize="10" Margin="0,0,0,4"/>
+                                <Button Content="↩ Reset 'don't ask again' choices" Click="ResetConfirmPrefsBtn_Click" Margin="0,0,0,0" Padding="4,2" HorizontalAlignment="Left"
+                                        Background="Transparent" Foreground="#7EB8F7" BorderThickness="0" Cursor="Hand"
+                                        ToolTip="Re-arm every block confirmation warning that was suppressed with 'Don't ask again'"/>
                             </StackPanel>
                         </Border>
                     </Popup>
@@ -146,6 +153,19 @@
                 </ContextMenu>
             </DataGrid.ContextMenu>
             <DataGrid.Columns>
+                <!-- Blocked state at a glance: ⛔ = traffic denied (IP and/or
+                     process rule active), ⏸ = rules exist but paused, empty =
+                     allowed (outbound default). Hover for which rule + its
+                     provenance. The marked cells themselves turn red +
+                     strikethrough so it's clear WHICH half is blocked. -->
+                <DataGridTemplateColumn Header="Block" Width="46" CanUserResize="False" SortMemberPath="IsTrafficBlocked">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding StatusGlyph}" FontSize="13" HorizontalAlignment="Center"
+                                       ToolTip="{Binding StatusToolTip}"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <!-- Tooltip shows the full Sysmon image path, plus the scheduled
                      task behind it for taskhostw rows (attribution survives
                      process exit — no more bare PIDs). -->
@@ -160,6 +180,10 @@
                                             <DataTrigger Binding="{Binding HasToolTip}" Value="False">
                                                 <Setter Property="ToolTip" Value="{x:Null}"/>
                                             </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsProcessBlocked}" Value="True">
+                                                <Setter Property="Foreground" Value="#E5534B"/>
+                                                <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                            </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </TextBlock.Style>
@@ -173,7 +197,28 @@
                                     SortMemberPath="LastSeen" Width="100"/>
                 <DataGridTextColumn Header="Tx Pkts"    Binding="{Binding TxPackets}"      Width="80"/>
                 <DataGridTextColumn Header="Tx Bytes"   Binding="{Binding TxBytesDisplay}" Width="90"/>
-                <DataGridTextColumn Header="Remote IP"   Binding="{Binding RemoteIp}"        Width="120"/>
+                <!-- Remote IP: blocked IPs turn red + strikethrough, hover
+                     shows the block rule's provenance -->
+                <DataGridTemplateColumn Header="Remote IP" Width="120" SortMemberPath="RemoteIp">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding RemoteIp}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsIpBlocked}" Value="True">
+                                                <Setter Property="Foreground" Value="#E5534B"/>
+                                                <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                <Setter Property="ToolTip" Value="{Binding IpBlockToolTip}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <!-- Host column: dims + italicises cells that are still resolving -->
                 <DataGridTemplateColumn Header="Host" Width="220">
                     <DataGridTemplateColumn.CellTemplate>
@@ -199,5 +244,20 @@
                 <DataGridTextColumn Header="Rx Bytes"   Binding="{Binding RxBytesDisplay}" Width="90"/>
             </DataGrid.Columns>
         </DataGrid>
+
+        <!-- Non-modal block feedback: outcome + one-click Undo. Replaces the
+             old per-block "Blocked!" MessageBox — the row visibly flipping to
+             ⛔ IS the confirmation; this just says what happened and offers
+             the takeback. Auto-hides after a few seconds. -->
+        <Border x:Name="BlockToast" Grid.Row="2" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16"
+                Background="{DynamicResource SurfaceAltBrush}" BorderBrush="#3FBF7F" BorderThickness="1" CornerRadius="6"
+                Padding="14,10" Visibility="Collapsed" Panel.ZIndex="5" MaxWidth="560">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="BlockToastText" TextWrapping="Wrap" MaxWidth="400" VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextPrimaryBrush}" FontSize="12"/>
+                <Button x:Name="BlockToastUndoBtn" Content="↩ Undo" Click="BlockToastUndo_Click" Margin="14,0,0,0"
+                        Padding="12,2" VerticalAlignment="Center" Style="{StaticResource PrimaryButton}"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </UserControl>

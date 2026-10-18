@@ -5,6 +5,14 @@ using System.Text;
 
 namespace AutoCommand.Models
 {
+    /// <summary>Firewall-block state of one blockable target (remote IP or executable).</summary>
+    public enum BlockRuleState
+    {
+        None,
+        Active,   // enabled block rules match — traffic is denied
+        Paused    // rules exist but are all disabled (fleet pause) — traffic flows
+    }
+
     public class SvchostMonitorItem : INotifyPropertyChanged, IResolvableHost
     {
         private long _rxPackets;
@@ -298,6 +306,87 @@ namespace AutoCommand.Models
 
         public string RxBytesDisplay => FormatBytes(RxBytes);
         public string TxBytesDisplay => FormatBytes(TxBytes);
+
+        // -------------------------------------------------------------------
+        // Firewall-block state — stamped by the view from the firewall's live
+        // inventory (the rules are the source of truth, so agent- and
+        // wf.msc-created blocks mark rows just like monitor-created ones).
+        // Two independent dimensions: the remote IP and the process exe.
+        // -------------------------------------------------------------------
+
+        private BlockRuleState _ipBlock = BlockRuleState.None;
+        private BlockRuleState _appBlock = BlockRuleState.None;
+        private string _ipBlockNote;     // rule Description (provenance), for tooltips
+        private string _appBlockNote;
+
+        public BlockRuleState IpBlockState => _ipBlock;
+        public BlockRuleState ProcessBlockState => _appBlock;
+
+        /// <summary>IP cell marker: red + strikethrough when an enabled block rule matches.</summary>
+        public bool IsIpBlocked => _ipBlock == BlockRuleState.Active;
+
+        /// <summary>Process cell marker: red + strikethrough when an enabled app rule matches.</summary>
+        public bool IsProcessBlocked => _appBlock == BlockRuleState.Active;
+
+        /// <summary>True when either dimension blocks this row's traffic.</summary>
+        public bool IsTrafficBlocked => IsIpBlocked || IsProcessBlocked;
+
+        /// <summary>True when block rules exist but are all disabled (fleet pause) — traffic flows.</summary>
+        public bool HasPausedBlock => !IsTrafficBlocked &&
+            (_ipBlock == BlockRuleState.Paused || _appBlock == BlockRuleState.Paused);
+
+        /// <summary>Status-column glyph: ⛔ blocked · ⏸ paused · empty = allowed.</summary>
+        public string StatusGlyph => IsTrafficBlocked ? "⛔" : HasPausedBlock ? "⏸" : "";
+
+        /// <summary>Provenance of the IP block rule (null when the IP is not blocked).</summary>
+        public string IpBlockToolTip =>
+            _ipBlock == BlockRuleState.None ? null :
+            (_ipBlock == BlockRuleState.Active
+                ? "⛔ Remote IP is blocked — outbound TCP/UDP rules active"
+                : "⏸ Block rules for this IP exist but are disabled (traffic flows) — re-enable from 'Blocked' → Manage all")
+            + (string.IsNullOrEmpty(_ipBlockNote) ? "" : $"\n{_ipBlockNote}")
+            + "\nUndo: right-click the row → Unblock, or 'Blocked' → Manage all.";
+
+        /// <summary>Provenance of the app block rule (null when the process is not blocked).</summary>
+        public string ProcessBlockToolTip =>
+            _appBlock == BlockRuleState.None ? null :
+            (_appBlock == BlockRuleState.Active
+                ? "⛔ This executable is blocked — outbound rule active"
+                : "⏸ A block rule for this executable exists but is disabled (traffic flows) — re-enable from 'Blocked' → Manage all")
+            + (string.IsNullOrEmpty(_appBlockNote) ? "" : $"\n{_appBlockNote}")
+            + "\nUndo: right-click the row → Unblock, or 'Blocked' → Manage all.";
+
+        /// <summary>Status-column tooltip: whichever dimension is blocked, with provenance.</summary>
+        public string StatusToolTip
+        {
+            get
+            {
+                if (!IsTrafficBlocked && !HasPausedBlock) return null;
+                var sb = new StringBuilder();
+                if (_ipBlock != BlockRuleState.None && IpBlockToolTip is string ip) sb.AppendLine(ip.TrimEnd());
+                if (_appBlock != BlockRuleState.None && ProcessBlockToolTip is string app) sb.AppendLine(app.TrimEnd());
+                return sb.Length == 0 ? null : sb.ToString();
+            }
+        }
+
+        /// <summary>Stamped by the view's blocked-state sync (see RefreshBlockStateFromFirewallAsync).</summary>
+        public void SetBlockState(BlockRuleState ip, string ipNote, BlockRuleState app, string appNote)
+        {
+            _ipBlock = ip;
+            _appBlock = app;
+            _ipBlockNote = ipNote;
+            _appBlockNote = appNote;
+            OnPropertyChanged(nameof(IpBlockState));
+            OnPropertyChanged(nameof(ProcessBlockState));
+            OnPropertyChanged(nameof(IsIpBlocked));
+            OnPropertyChanged(nameof(IsProcessBlocked));
+            OnPropertyChanged(nameof(IsTrafficBlocked));
+            OnPropertyChanged(nameof(HasPausedBlock));
+            OnPropertyChanged(nameof(StatusGlyph));
+            OnPropertyChanged(nameof(IpBlockToolTip));
+            OnPropertyChanged(nameof(ProcessBlockToolTip));
+            OnPropertyChanged(nameof(StatusToolTip));
+        }
 
         /// <summary>
         /// Scheduled task that launched this taskhostw instance (attribution from

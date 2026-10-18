@@ -36,6 +36,24 @@ namespace AutoCommand.Views
         private readonly List<BlockedEntry> _blockedEntries = new();
         private readonly string _blockedPath = "blocked.txt";
 
+        // Live firewall truth for row marking: which remote IPs / executable
+        // paths have block rules (any enabled rule = active, all disabled =
+        // paused). Rebuilt from GetBlockedInventoryAsync after every
+        // block/unblock, when the Blocked-rules window closes, and once a
+        // minute to catch out-of-band changes (agent actions, wf.msc edits).
+        private readonly HashSet<string> _activeIps = new();
+        private readonly HashSet<string> _pausedIps = new();
+        private readonly HashSet<string> _activeApps = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pausedApps = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _blockNotes = new(StringComparer.OrdinalIgnoreCase);
+        private DispatcherTimer _blockStateTimer;
+        private bool _blockStateSyncing;
+
+        // Non-modal block feedback (message + Undo, auto-hides)
+        private DispatcherTimer _toastTimer;
+        private string _toastUndoKind;
+        private string _toastUndoKey;
+
         // High-transmitter threshold in bytes, persisted in tx_threshold.txt
         private long _txThreshold = 1024;
         private readonly string _txThresholdPath = "tx_threshold.txt";
@@ -101,7 +119,18 @@ namespace AutoCommand.Views
             RefreshIgnoredUi();
             LoadBlockedEntries();
             RefreshBlockedUi();
+            RefreshConfirmPrefsUi();
             LoadTxThreshold();
+
+            // Mark rows whose IP/process already has firewall rules (includes
+            // blocks created outside this monitor — the rules are the truth)
+            _ = RefreshBlockStateFromFirewallAsync();
+            _blockStateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+            _blockStateTimer.Tick += (s, args) => _ = RefreshBlockStateFromFirewallAsync();
+            _blockStateTimer.Start();
+
+            _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6.5) };
+            _toastTimer.Tick += (s, args) => HideToast();
 
             // Setup auto-save every 1 hour
             _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
@@ -360,6 +389,9 @@ namespace AutoCommand.Views
                 }
                 EnrichWithTaskInfo(item);
                 EnrichWithSvchostIdentity(item);
+                // A blocked IP reappearing as a fresh row shows ⛔ immediately,
+                // not only after the next sync pass
+                ApplyBlockState(item);
                 _uiCollection.Add(item);
             });
         }
@@ -479,17 +511,46 @@ namespace AutoCommand.Views
                 ? $"🚫 Ignore process '{sel.ProcessName}'"
                 : "🚫 Ignore process (no row selected)";
 
+            // Block items tell the current state: flip to Unblock when a
+            // block exists, and explain (disabled) when it is only paused —
+            // re-blocking a paused target would silently not block anything.
             bool validIp = sel != null && System.Net.IPAddress.TryParse(sel.RemoteIp, out _);
-            BlockIpMenuItem.IsEnabled = validIp;
-            BlockIpMenuItem.Header = validIp
-                ? $"⛔ Block remote IP {sel.RemoteIp} in Firewall"
-                : "⛔ Block Remote IP in Firewall";
+            if (validIp && sel.IpBlockState == BlockRuleState.Active)
+            {
+                BlockIpMenuItem.IsEnabled = true;
+                BlockIpMenuItem.Header = $"✅ Unblock remote IP {sel.RemoteIp} — traffic resumes";
+            }
+            else if (validIp && sel.IpBlockState == BlockRuleState.Paused)
+            {
+                BlockIpMenuItem.IsEnabled = false;
+                BlockIpMenuItem.Header = $"⏸ IP block for {sel.RemoteIp} is paused — re-enable from 'Blocked' → Manage all";
+            }
+            else
+            {
+                BlockIpMenuItem.IsEnabled = validIp;
+                BlockIpMenuItem.Header = validIp
+                    ? $"⛔ Block remote IP {sel.RemoteIp} in Firewall"
+                    : "⛔ Block Remote IP in Firewall";
+            }
 
             bool blockableProcess = sel != null && sel.ProcessId > 0;
-            BlockProcessMenuItem.IsEnabled = blockableProcess;
-            BlockProcessMenuItem.Header = blockableProcess && !string.IsNullOrEmpty(sel.ProcessName)
-                ? $"⛔ Block process '{sel.ProcessName}' in Firewall"
-                : "⛔ Block Process in Firewall";
+            if (blockableProcess && sel.ProcessBlockState == BlockRuleState.Active)
+            {
+                BlockProcessMenuItem.IsEnabled = true;
+                BlockProcessMenuItem.Header = $"✅ Unblock process '{sel.ProcessName}' — traffic resumes";
+            }
+            else if (blockableProcess && sel.ProcessBlockState == BlockRuleState.Paused)
+            {
+                BlockProcessMenuItem.IsEnabled = false;
+                BlockProcessMenuItem.Header = "⏸ Process block is paused — re-enable from 'Blocked' → Manage all";
+            }
+            else
+            {
+                BlockProcessMenuItem.IsEnabled = blockableProcess;
+                BlockProcessMenuItem.Header = blockableProcess && !string.IsNullOrEmpty(sel.ProcessName)
+                    ? $"⛔ Block process '{sel.ProcessName}' in Firewall"
+                    : "⛔ Block Process in Firewall";
+            }
 
             bool killable = sel != null && sel.ProcessId > 0;
             KillProcessMenuItem.IsEnabled = killable;
@@ -637,25 +698,59 @@ namespace AutoCommand.Views
                 return;
             }
 
-            string warning = Services.IpClassifier.WarningText(ip);
-            string confirm = $"{warning}\nBlock all outbound traffic to remote IP '{ip}' (contacted by '{item.ProcessName}')?\n\n" +
-                             "2 rules are created: outbound TCP and UDP. Inbound is already covered by the\n" +
-                             "firewall's stateful filtering — this avoids the old 4-rule clutter.\n" +
-                             "Undo anytime: right-click this row again, or 'Blocked' → Manage all.";
-            if (warning.Length > 0)
-                confirm += "\n\n⚠ Think twice: this IP is Microsoft infrastructure.";
-            if (MessageBox.Show(confirm, "Confirm Block",
-                    MessageBoxButton.YesNo, warning.Length > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            // The menu flips to "Unblock" once a block exists — the same
+            // item removes it again.
+            if (item.IpBlockState == BlockRuleState.Active)
+            {
+                await ConfirmAndRemoveBlockAsync("ip", ip);
+                return;
+            }
+            if (item.IpBlockState == BlockRuleState.Paused)
+            {
+                ShowToast($"⏸ The block for {ip} is paused (traffic flows). Re-enable it from 'Blocked' → Manage all.");
+                return;
+            }
+
+            string msWarning = IpClassifier.WarningText(ip); // "" when not Microsoft infrastructure
+            bool msApplies = msWarning.Length > 0;
+
+            // Per-class suppression: the prompt is skipped only when the
+            // generic confirm AND (if applicable) the Microsoft-infra warning
+            // are both silenced — a silenced generic confirm still shows the
+            // dialog when the infra warning itself is not silenced.
+            bool confirmSuppressed =
+                ConfirmPrefs.IsSuppressed(ConfirmPrefs.ConfirmIp) &&
+                (!msApplies || ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnMsInfra));
+
+            if (!confirmSuppressed)
+            {
+                string warning = msApplies && !ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnMsInfra)
+                    ? msWarning + "\n\n⚠ Think twice: this IP is Microsoft infrastructure."
+                    : "";
+                string detail = $"Contacted by '{item.ProcessName}'.\n\n" +
+                                "2 rules are created: outbound TCP and UDP — inbound is already covered by the\n" +
+                                "firewall's stateful filtering.\n" +
+                                "Undo anytime: the Undo button on the toast, right-click this row again,\nor 'Blocked' → Manage all.";
+                // The checkbox silences the highest-severity thing on screen:
+                // the infra warning when present, otherwise the plain confirm.
+                string key = warning.Length > 0 ? ConfirmPrefs.WarnMsInfra : ConfirmPrefs.ConfirmIp;
+                string label = warning.Length > 0
+                    ? "Don't warn me about Microsoft-infrastructure IPs — I know what I'm doing"
+                    : "Don't ask again before blocking remote IPs";
+                if (!ConfirmBlockWithDialog($"Block all outbound traffic to remote IP {ip}?", warning, detail, key, label))
+                    return;
+            }
 
             try
             {
-                string note = BuildProvenance(item, $"→ {ip}");
-                var (created, updated) = await Services.FirewallService.Instance.AddIpBlockAsync(ip, note);
+                string note = BuildProvenance(item, $"→ {ip}", confirmSuppressed);
+                var (created, updated) = await FirewallService.Instance.AddIpBlockAsync(ip, note);
                 RecordBlockedEntry("ip", ip, item.ProcessName);
-                MessageBox.Show(created > 0
-                        ? $"Blocked remote IP {ip} — 2 rules (outbound TCP/UDP).\nProvenance written to the rule description (visible in wf.msc)."
+                _ = RefreshBlockStateFromFirewallAsync();
+                ShowToast(created > 0
+                        ? $"⛔ Blocked remote IP {ip} — 2 rules (outbound TCP/UDP).\nProvenance written to the rule description (visible in wf.msc)."
                         : $"Block for {ip} already existed — refreshed its provenance (no duplicate rules).",
-                    "Blocked", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "ip", ip);
             }
             catch (Exception ex)
             {
@@ -673,35 +768,62 @@ namespace AutoCommand.Views
                 return;
             }
 
+            string path = GetProcessPath(item.ProcessId) ?? item.ImagePath;
+            if (string.IsNullOrEmpty(path))
+            {
+                MessageBox.Show("Could not determine process path (access denied or process exited).", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            if (item.ProcessBlockState == BlockRuleState.Active)
+            {
+                await ConfirmAndRemoveBlockAsync("proc", path);
+                return;
+            }
+            if (item.ProcessBlockState == BlockRuleState.Paused)
+            {
+                ShowToast($"⏸ The block for {path} is paused (traffic flows). Re-enable it from 'Blocked' → Manage all.");
+                return;
+            }
+
+            string warning = "";
+            if (string.Equals(item.ProcessName, "svchost.exe", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.ProcessName, "taskhostw.exe", StringComparison.OrdinalIgnoreCase))
+                warning = $"'{item.ProcessName}' hosts Windows SERVICES. One instance carries DNS (Dnscache),\n" +
+                          "DHCP, diagnostics and more — blocking it is the #1 cause of 'I blocked something\n" +
+                          "and lost my internet'. If a specific connection looks bad, block the IP, not this process.";
+            else if (path.StartsWith(Environment.SystemDirectory, StringComparison.OrdinalIgnoreCase))
+                warning = $"'{item.ProcessName}' is a Windows component. Blocking it can break shell features,\n" +
+                          "widgets, or web content in Start/Settings.";
+
+            bool coreApplies = warning.Length > 0;
+            bool confirmSuppressed =
+                ConfirmPrefs.IsSuppressed(ConfirmPrefs.ConfirmProcess) &&
+                (!coreApplies || ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnWindowsCore));
+
+            if (!confirmSuppressed)
+            {
+                string shownWarning = coreApplies && !ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnWindowsCore) ? warning : "";
+                string detail = $"{path}\n\n(1 outbound rule)\n" +
+                                "Undo anytime: the Undo button on the toast, right-click the row again,\nor 'Blocked' → Manage all.";
+                string key = shownWarning.Length > 0 ? ConfirmPrefs.WarnWindowsCore : ConfirmPrefs.ConfirmProcess;
+                string label = shownWarning.Length > 0
+                    ? "Don't warn me about blocking Windows service hosts / components — I know what I'm doing"
+                    : "Don't ask again before blocking processes";
+                if (!ConfirmBlockWithDialog("Block all outbound network traffic for this process?", shownWarning, detail, key, label))
+                    return;
+            }
+
             try
             {
-                string path = GetProcessPath(item.ProcessId);
-                if (string.IsNullOrEmpty(path))
-                {
-                    MessageBox.Show("Could not determine process path (access denied or process exited).", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-
-                string warning = "";
-                if (string.Equals(item.ProcessName, "svchost.exe", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(item.ProcessName, "taskhostw.exe", StringComparison.OrdinalIgnoreCase))
-                    warning = $"⚠ '{item.ProcessName}' hosts Windows SERVICES. One instance carries DNS (Dnscache),\n" +
-                              "DHCP, diagnostics and more — blocking it is the #1 cause of 'I blocked something\n" +
-                              "and lost my internet'. If a specific connection looks bad, block the IP, not this process.\n\n";
-                else if (path.StartsWith(Environment.SystemDirectory, StringComparison.OrdinalIgnoreCase))
-                    warning = $"⚠ '{item.ProcessName}' is a Windows component. Blocking it can break shell features,\n" +
-                              "widgets, or web content in Start/Settings.\n\n";
-
-                if (MessageBox.Show($"{warning}Block all outbound network traffic for\n{path}\n(1 outbound rule; undo from 'Blocked' → Manage all)?",
-                        "Confirm Block", MessageBoxButton.YesNo, warning.Length > 0 ? MessageBoxImage.Warning : MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-
-                string note = BuildProvenance(item, $"app: {path}");
-                var (created, updated) = await Services.FirewallService.Instance.AddAppBlockAsync(path, note);
+                string note = BuildProvenance(item, $"app: {path}", confirmSuppressed);
+                var (created, updated) = await FirewallService.Instance.AddAppBlockAsync(path, note);
                 RecordBlockedEntry("proc", path, item.ProcessName);
-                MessageBox.Show(created > 0
-                        ? $"Blocked application (1 outbound rule):\n{path}"
+                _ = RefreshBlockStateFromFirewallAsync();
+                ShowToast(created > 0
+                        ? $"⛔ Blocked application (1 outbound rule):\n{path}"
                         : $"Block for {System.IO.Path.GetFileName(path)} already existed — provenance refreshed.",
-                    "Blocked", MessageBoxButton.OK, MessageBoxImage.Information);
+                    "proc", path);
             }
             catch (Exception ex)
             {
@@ -709,16 +831,35 @@ namespace AutoCommand.Views
             }
         }
 
+        /// <summary>
+        /// Shows the block confirmation window (warning + "don't ask again"
+        /// check-off). MessageBox cannot host the checkbox, hence the dialog;
+        /// a checked box persists the per-class suppression immediately.
+        /// </summary>
+        private bool ConfirmBlockWithDialog(string headline, string warning, string detail,
+                                            string suppressKey, string suppressLabel)
+        {
+            var win = new BlockConfirmWindow(headline, warning, detail, suppressKey, suppressLabel)
+            {
+                Owner = Window.GetWindow(this)
+            };
+            if (win.ShowDialog() != true) return false;
+            if (win.Suppress) ConfirmPrefs.Suppress(suppressKey);
+            return true;
+        }
+
         /// <summary>Full provenance embedded into the firewall rule Description.</summary>
-        private static string BuildProvenance(SvchostMonitorItem item, string what)
+        private static string BuildProvenance(SvchostMonitorItem item, string what, bool confirmSuppressed = false)
         {
             string host = "";
             try { host = item.HostnameDisplay is string h && h.Contains("…") == false && h != "resolving…" ? $" host {h}" : ""; } catch { }
             // svchost blocks say which service was actually blocked — the
             // identity survives in wf.msc even after the PID is recycled
             string svc = item.HasServiceIdentity ? $" [{item.IdentityLabel}]" : "";
+            // Blocks made under a suppressed prompt say so — auditable later
+            // in wf.msc that the standard confirmation was skipped
             return $"[blocked {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC] {item.ProcessName}{svc} PID {item.ProcessId} {what}{host} · " +
-                   $"rx {item.RxBytesDisplay} tx {item.TxBytesDisplay} · AutoCommand Process Monitor";
+                   $"rx {item.RxBytesDisplay} tx {item.TxBytesDisplay}{(confirmSuppressed ? " · confirm-suppressed" : "")} · AutoCommand Process Monitor";
         }
 
         private void BlockedListBtn_Click(object sender, RoutedEventArgs e)
@@ -731,35 +872,53 @@ namespace AutoCommand.Views
         {
             BlockedListPopup.IsOpen = false;
             var win = new BlockedRulesWindow { Owner = Window.GetWindow(this) };
+            // Unblock/re-enable there must be reflected in this grid's glyphs
+            win.Closed += (s, args) => _ = RefreshBlockStateFromFirewallAsync();
             win.Show();
         }
 
         private async void UnblockBtn_Click(object sender, RoutedEventArgs e)
         {
             if (BlockedListBox.SelectedItem is not BlockedEntry entry) return;
+            await ConfirmAndRemoveBlockAsync(entry.Kind, entry.Key);
+        }
 
-            if (MessageBox.Show($"Remove the firewall block for '{entry.Key}'?",
+        /// <summary>Asks once, then removes the block (rules + monitor record) and toasts the outcome.</summary>
+        private async Task ConfirmAndRemoveBlockAsync(string kind, string key)
+        {
+            if (MessageBox.Show($"Remove the firewall block for\n{key}?\n\nIts rules are deleted and traffic resumes immediately.",
                 "Confirm Unblock", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            await RemoveBlockCoreAsync(kind, key);
+        }
 
+        /// <summary>Removes the firewall rules and the blocked.txt record; reports via toast.</summary>
+        private async Task RemoveBlockCoreAsync(string kind, string key)
+        {
             try
             {
-                int removed = entry.Kind == "ip"
-                    ? await FirewallService.Instance.RemoveBlockRulesForIpAsync(entry.Key)
-                    : await FirewallService.Instance.RemoveBlockRulesForAppAsync(entry.Key);
+                int removed = kind == "ip"
+                    ? await FirewallService.Instance.RemoveBlockRulesForIpAsync(key)
+                    : await FirewallService.Instance.RemoveBlockRulesForAppAsync(key);
 
-                _blockedEntries.Remove(entry);
+                _blockedEntries.RemoveAll(b => b.Kind == kind && b.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
                 SaveBlockedEntries();
                 RefreshBlockedUi();
-
-                MessageBox.Show(removed > 0
-                    ? $"Removed {removed} firewall rule(s) for:\n{entry.Key}"
-                    : $"No matching firewall rules found (already removed?) for:\n{entry.Key}",
-                    "Unblocked", MessageBoxButton.OK, MessageBoxImage.Information);
+                _ = RefreshBlockStateFromFirewallAsync();
+                ShowToast(removed > 0
+                        ? $"✅ Unblocked {key} — {removed} firewall rule(s) removed, traffic resumes."
+                        : $"No matching firewall rules found for {key} (already removed?).");
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Failed to unblock: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+        }
+
+        private void ResetConfirmPrefsBtn_Click(object sender, RoutedEventArgs e)
+        {
+            ConfirmPrefs.ResetAll();
+            RefreshConfirmPrefsUi();
+            ShowToast("↩ Confirmation prompts restored — blocks will ask again (each warning class, until re-suppressed).");
         }
 
         private async void KillProcess_Click(object sender, RoutedEventArgs e)
@@ -893,6 +1052,124 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
+        // Blocked-state marking — the firewall rules are the source of truth
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Rebuilds the blocked-IP / blocked-app sets from the live firewall
+        /// inventory (agent- and wf.msc-created blocks included, not just
+        /// this monitor's), then re-marks every row. A failed inventory read
+        /// returns an empty list — marks just clear until the next sync.
+        /// </summary>
+        private async Task RefreshBlockStateFromFirewallAsync()
+        {
+            if (_blockStateSyncing) return;
+            _blockStateSyncing = true;
+            try
+            {
+                var inventory = await FirewallService.Instance.GetBlockedInventoryAsync();
+
+                _activeIps.Clear(); _pausedIps.Clear();
+                _activeApps.Clear(); _pausedApps.Clear();
+                _blockNotes.Clear();
+                foreach (var t in inventory)
+                {
+                    if (t.Kind == "ip")
+                    {
+                        if (string.IsNullOrEmpty(t.Ip)) continue;
+                        if (t.EnabledRules > 0) _activeIps.Add(t.Ip); else _pausedIps.Add(t.Ip);
+                    }
+                    else
+                    {
+                        if (string.IsNullOrEmpty(t.AppPath)) continue;
+                        if (t.EnabledRules > 0) _activeApps.Add(t.AppPath); else _pausedApps.Add(t.AppPath);
+                    }
+                    if (!string.IsNullOrEmpty(t.Description))
+                        _blockNotes[t.Key] = t.Description;
+                }
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    foreach (var item in _uiCollection)
+                        ApplyBlockState(item);
+                });
+            }
+            finally
+            {
+                _blockStateSyncing = false;
+            }
+        }
+
+        /// <summary>Stamps one row's IP / process block state from the cached sets.</summary>
+        private void ApplyBlockState(SvchostMonitorItem item)
+        {
+            string ip = item.RemoteIp ?? "";
+            var ipState = _activeIps.Contains(ip) ? BlockRuleState.Active
+                        : _pausedIps.Contains(ip) ? BlockRuleState.Paused
+                        : BlockRuleState.None;
+            _blockNotes.TryGetValue("ip:" + ip, out string ipNote);
+
+            // Sysmon's image path is the stable identity; the live module
+            // lookup covers rows created before Sysmon stamped one.
+            string appPath = !string.IsNullOrEmpty(item.ImagePath) ? item.ImagePath : LiveProcessPath(item.ProcessId);
+            var appState = BlockRuleState.None;
+            string appNote = null;
+            if (!string.IsNullOrEmpty(appPath))
+            {
+                appState = _activeApps.Contains(appPath) ? BlockRuleState.Active
+                         : _pausedApps.Contains(appPath) ? BlockRuleState.Paused
+                         : BlockRuleState.None;
+                if (_blockNotes.TryGetValue("app:" + appPath.ToLowerInvariant(), out string note))
+                    appNote = note;
+            }
+
+            item.SetBlockState(ipState, ipNote, appState, appNote);
+        }
+
+        /// <summary>Cheap live module path (no WMI fallback — the periodic sync must stay fast).</summary>
+        private static string LiveProcessPath(int pid)
+        {
+            if (pid <= 0) return null;
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                return p.MainModule?.FileName;
+            }
+            catch { return null; }
+        }
+
+        // -----------------------------------------------------------------------
+        // Non-modal block feedback (message + Undo, auto-hides)
+        // -----------------------------------------------------------------------
+
+        private void ShowToast(string message, string undoKind = null, string undoKey = null)
+        {
+            BlockToastText.Text = message;
+            _toastUndoKind = undoKind;
+            _toastUndoKey = undoKey;
+            BlockToastUndoBtn.Visibility = undoKind != null ? Visibility.Visible : Visibility.Collapsed;
+            BlockToast.Visibility = Visibility.Visible;
+            _toastTimer.Stop();
+            _toastTimer.Start();
+        }
+
+        private void HideToast()
+        {
+            _toastTimer.Stop();
+            BlockToast.Visibility = Visibility.Collapsed;
+            _toastUndoKind = null;
+            _toastUndoKey = null;
+        }
+
+        private async void BlockToastUndo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_toastUndoKind == null || _toastUndoKey == null) return;
+            string kind = _toastUndoKind, key = _toastUndoKey;
+            HideToast();
+            await RemoveBlockCoreAsync(kind, key);
+        }
+
+        // -----------------------------------------------------------------------
         // blocked.txt persistence (format: kind|key|processName|timestamp)
         // -----------------------------------------------------------------------
 
@@ -942,6 +1219,16 @@ namespace AutoCommand.Views
             BlockedListBox.ItemsSource = _blockedEntries
                 .OrderBy(b => b.Kind).ThenBy(b => b.Key, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            RefreshConfirmPrefsUi();
+        }
+
+        /// <summary>Keeps the Blocked popup's suppression indicator honest.</summary>
+        private void RefreshConfirmPrefsUi()
+        {
+            int n = ConfirmPrefs.SuppressedCount;
+            SuppressedPromptsText.Text = n > 0
+                ? $"{n} of 4 confirmation prompt(s) suppressed"
+                : "All confirmation prompts active";
         }
 
         private void SaveCsvBtn_Click(object sender, RoutedEventArgs e)
