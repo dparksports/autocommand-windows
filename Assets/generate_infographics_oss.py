@@ -1,9 +1,16 @@
 """Generate the plain-language infographics for people trying AutoCommand
 because they are tired of antivirus software.
 
-Same house style as generate_infographics.py (dark cyber theme, matplotlib)
-but sized for non-technical readers: bigger type throughout (body 17-19pt,
-panel headers 21-23pt) and everyday wording — no jargon, no tab names.
+House style adopted from the Z.ai Chat Recovery README assets (assets/*.svg):
+Apple-like light theme — canvas #F5F5F7, white cards with #E5E5EA hairline
+borders, #007AFF blue accent, #1E8E3E green / #C35C00 orange with tinted
+bands (#E8F8EE, #E5F1FF, #FFF3E0), text #1D1D1F / #86868B. Font is Segoe UI
+(fallback DejaVu Sans) at generous sizes: headings 34, card titles 24-25,
+body 19 — bigger and more readable than the previous dark theme.
+
+Copy note: the old "built-in helper" wording is gone; asking now means
+clicking the row or inviting your own AI assistant (Be My Guest).
+
 Lines are pre-wrapped by hand: matplotlib does not wrap text, and the exact
 line counts are what the vertical layout is measured against.
 
@@ -20,90 +27,134 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import FancyBboxPatch
+from matplotlib.patches import Circle, FancyBboxPatch
 
-matplotlib.rcParams["font.family"] = "DejaVu Sans"
+matplotlib.rcParams["font.family"] = ["Segoe UI", "DejaVu Sans"]
 
-# ---- palette (house) ------------------------------------------------------
-BG_TOP = "#0A1526"
-BG_BOT = "#0C2136"
-PANEL = "#0F1E33"
-PANEL_EDGE = "#2A4A73"
-CYAN = "#00E5FF"
-CYAN_DIM = "#0E6E8C"
-TXT = "#E8F4FF"
-SUB = "#8FAECB"
-ORANGE = "#FFAE42"
-GREEN = "#3DDC84"
+# ---- palette (Z.ai Chat Recovery house style) ------------------------------
+PAGE = "#F5F5F7"
+CARD = "#FFFFFF"
+BORDER = "#E5E5EA"
+TEXT = "#1D1D1F"
+MUTED = "#86868B"
+BLUE = "#007AFF"
+BLUE_TINT = "#E5F1FF"
+GREEN = "#1E8E3E"
+GREEN_TINT = "#E8F8EE"
+ORANGE = "#C35C00"
+ORANGE_TINT = "#FFF3E0"
+RED = "#D70015"
+RED_TINT = "#FDECEC"
 
 W, H = 1600, 1000
-VERSION = "v2026.10.17.2"
+MARGIN = 56
+VERSION = "v2026.10.17.3"
 OUT = os.path.dirname(os.path.abspath(__file__))
 
 
 def new_canvas():
     fig = plt.figure(figsize=(W / 100, H / 100), dpi=150)
+    fig.patch.set_facecolor(PAGE)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
     ax.set_ylim(0, H)
     ax.invert_yaxis()
     ax.axis("off")
-    grad = np.linspace(0, 1, 256).reshape(-1, 1)
-    ax.imshow(grad, extent=[0, W, H, 0], aspect="auto",
-              cmap=matplotlib.colors.LinearSegmentedColormap.from_list("bg", [BG_TOP, BG_BOT]), zorder=-2)
-    rng = np.random.default_rng(42)
-    dots_x, dots_y = rng.uniform(0, W, 90), rng.uniform(0, H, 90)
-    ax.scatter(dots_x, dots_y, s=rng.uniform(2, 14, 90), color=CYAN, alpha=rng.uniform(0.04, 0.16, 90), zorder=-1)
     return fig, ax
 
 
-def panel(ax, x, y, w, h, edge=PANEL_EDGE, lw=1.8, face=PANEL, alpha=0.94):
-    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=16",
-                                linewidth=lw, edgecolor=edge, facecolor=face, alpha=alpha, zorder=1))
-
-
-def topbar(ax, x, y, w, accent, h=10):
-    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=5",
-                                linewidth=0, facecolor=accent, zorder=2))
-
-
-def chip(ax, x, y, text, color=CYAN, edge=CYAN_DIM, size=14.5):
-    ax.text(x, y, text, color=color, fontsize=size, fontweight="bold",
-            ha="left", va="center",
-            bbox=dict(boxstyle="round,pad=0.5", facecolor=PANEL, edgecolor=edge, lw=1.6), zorder=3)
+def card(ax, x, y, w, h, face=CARD, edge=BORDER, lw=1.6, rounding=16):
+    ax.add_patch(FancyBboxPatch((x, y), w, h,
+                                boxstyle=f"round,pad=0,rounding_size={rounding}",
+                                linewidth=lw, edgecolor=edge, facecolor=face, zorder=1))
 
 
 def header(ax, kicker, title, subtitle):
-    panel(ax, 40, 34, W - 80, 150, edge=CYAN_DIM, lw=2.4, alpha=0.96)
-    ax.add_patch(FancyBboxPatch((40, 34), 16, 150, boxstyle="round,pad=0,rounding_size=8",
-                                linewidth=0, facecolor=CYAN, zorder=2))
-    ax.text(92, 78, kicker, color=CYAN, fontsize=17, fontweight="bold", va="center")
-    ax.text(92, 126, title, color=TXT, fontsize=29, fontweight="bold", va="center")
-    ax.text(92, 162, subtitle, color=SUB, fontsize=18.5, va="center")
-    ax.text(W - 72, 109, VERSION, color=BG_TOP, fontsize=19, fontweight="bold",
+    ax.text(MARGIN, 62, kicker, color=BLUE, fontsize=16, fontweight="bold", va="center")
+    ax.text(MARGIN, 112, title, color=TEXT, fontsize=34, fontweight="bold", va="center")
+    ax.text(MARGIN, 156, subtitle, color=MUTED, fontsize=20, va="center")
+    ax.text(W - MARGIN, 62, VERSION, color=MUTED, fontsize=14.5, fontweight="bold",
             ha="right", va="center",
-            bbox=dict(boxstyle="round,pad=0.5", facecolor=CYAN, edgecolor="none"))
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=CARD, edgecolor=BORDER, lw=1.2))
 
 
-def footer(ax, text):
-    panel(ax, 40, H - 78, W - 80, 50, edge=PANEL_EDGE, alpha=0.95)
-    ax.text(W / 2, H - 53, text, color=CYAN, fontsize=15.5, ha="center", va="center", fontweight="bold")
+def green_footer(ax, y, text, h=58):
+    card(ax, MARGIN, y, W - 2 * MARGIN, h, face=GREEN_TINT, edge="none", rounding=14)
+    ax.text(W / 2, y + h / 2, text, color=GREEN, fontsize=18.5, fontweight="bold",
+            ha="center", va="center", zorder=3)
 
 
-def bullet_block(ax, x, y, bullets_, size=17.5, lh=30, gap=18, dot=CYAN, color=TXT):
-    """Each bullet is a list of pre-wrapped lines. Running cursor: wrapping
-    advances it, so continuation lines can never collide with the next bullet."""
+def blue_band(ax, y, h, line1, line2):
+    card(ax, MARGIN, y, W - 2 * MARGIN, h, face=BLUE_TINT, edge="none", rounding=14)
+    ax.text(W / 2, y + h * 0.36, line1, color=BLUE, fontsize=19.5, fontweight="bold",
+            ha="center", va="center", zorder=3)
+    ax.text(W / 2, y + h * 0.70, line2, color=BLUE, fontsize=17.5, alpha=0.88,
+            ha="center", va="center", zorder=3)
+
+
+def pill(ax, x, y, text, tint=False, size=16):
+    face, edge, color = (GREEN_TINT, "none", GREEN) if tint else (CARD, BORDER, TEXT)
+    t = ax.text(x, y, text, color=color, fontsize=size, fontweight="bold",
+                ha="left", va="center", zorder=3,
+                bbox=dict(boxstyle="round,pad=0.55", facecolor=face, edgecolor=edge,
+                          lw=1.4 if edge != "none" else 0))
+    return t
+
+
+def pill_row(ax, fig, y, items):
+    """Items auto-space by measured width; ("text", True) renders as a green tint pill."""
+    renderer = fig.canvas.get_renderer()
+    px = MARGIN + 24
+    for item in items:
+        text, tint = (item, False) if isinstance(item, str) else item
+        t = pill(ax, px, y, text, tint=tint)
+        bb = t.get_window_extent(renderer=renderer).transformed(ax.transData.inverted())
+        px = bb.x1 + 26
+
+
+def chip(ax, x, y, text, size=15.5):
+    ax.text(x, y, text, color=TEXT, fontsize=size, fontweight="bold",
+            va="center", zorder=3,
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=CARD, edgecolor=BORDER, lw=1.4))
+
+
+def bullet_block(ax, x, y, bullets_, size=19, lh=32, gap=16, dot=BLUE, color=TEXT):
+    """Each bullet is a list of pre-wrapped lines; returns the running y cursor."""
     for lines in bullets_:
-        ax.text(x - 24, y, "•", color=dot, fontsize=size + 2, fontweight="bold",
-                va="center", ha="center")
+        ax.text(x - 22, y, "•", color=dot, fontsize=size + 2, fontweight="bold",
+                va="center", ha="center", zorder=3)
         for i, seg in enumerate(lines):
-            ax.text(x, y + i * lh, seg, color=color, fontsize=size, va="center")
+            ax.text(x, y + i * lh, seg, color=color, fontsize=size, va="center", zorder=3)
         y += len(lines) * lh + gap
     return y
 
 
-def divider(ax, x, y, w, color=PANEL_EDGE):
-    ax.plot([x, x + w], [y, y], color=color, lw=1.6, zorder=2)
+def divider(ax, x, y, w):
+    ax.plot([x, x + w], [y, y], color=BORDER, lw=1.6, zorder=2)
+
+
+def step_cards(ax, fig, steps, y=196, h=560):
+    """steps: list of (number, title, [lines]). Blue number circles, white cards."""
+    gap = 36
+    pw = (W - 2 * MARGIN - 2 * gap) / 3
+    for i, (num, title, lines) in enumerate(steps):
+        x = MARGIN + i * (pw + gap)
+        card(ax, x, y, pw, h)
+        cx = x + pw / 2
+        ax.add_patch(Circle((cx, y + 88), 30, facecolor=BLUE, edgecolor="none", zorder=2))
+        ax.text(cx, y + 88, num, color="#FFFFFF", fontsize=26, fontweight="bold",
+                ha="center", va="center", zorder=3)
+        ax.text(cx, y + 170, title, color=TEXT, fontsize=25, fontweight="bold",
+                ha="center", va="center", zorder=3)
+        yy = y + 218
+        for seg in lines:
+            if seg:
+                ax.text(cx, yy, seg, color=TEXT, fontsize=19, ha="center", va="center", zorder=3)
+            yy += 34
+        if i < 2:
+            ax.annotate("", xy=(x + pw + gap - 8, y + 250), xytext=(x + pw + 8, y + 250),
+                        arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=2.8))
+    return y + h
 
 
 # ============================================================ 1: AV vs AutoCommand
@@ -113,52 +164,53 @@ def oss_alternative():
            "Your antivirus says “No threats found.”",
            "So why does your computer still feel wrong?")
 
+    cy, ch = 196, 580
+    cw = 676
+
     # Left: your antivirus
-    lx, ly, lw_, lh_ = 40, 210, 690, 480
-    panel(ax, lx, ly, lw_, lh_, edge="#7A5A20", lw=2.0)
-    topbar(ax, lx, ly, lw_, ORANGE)
-    ax.text(lx + 30, ly + 56, "YOUR ANTIVIRUS", color=ORANGE, fontsize=23, fontweight="bold", va="center")
-    bullet_block(ax, lx + 54, ly + 104, [
-        ["Checks files against a list of known bad", "ones — like a wanted-poster matching game."],
-        ["Removes or quarantines what it recognizes."],
-        ["Says “No threats found” when nothing", "on your PC matches its list."],
+    card(ax, MARGIN, cy, cw, ch)
+    ax.text(MARGIN + 32, cy + 54, "YOUR ANTIVIRUS", color=ORANGE, fontsize=24,
+            fontweight="bold", va="center", zorder=3)
+    bullet_block(ax, MARGIN + 56, cy + 106, [
+        ["Matches files against a list of", "known bad ones — wanted-poster style."],
+        ["Removes or quarantines what it", "recognizes."],
+        ["Says “No threats found” when", "nothing on your PC matches its list."],
     ], dot=ORANGE, gap=14)
-    divider(ax, lx + 30, ly + 288, lw_ - 60, "#7A5A20")
-    ax.text(lx + 30, ly + 320, "WHAT IT CAN'T TELL YOU", color=SUB, fontsize=19, fontweight="bold", va="center")
-    bullet_block(ax, lx + 54, ly + 356, [
-        ["Why the fan is spinning when nothing is open."],
+    divider(ax, MARGIN + 32, cy + 336, cw - 64)
+    ax.text(MARGIN + 32, cy + 376, "WHAT IT CAN'T TELL YOU", color=MUTED, fontsize=18,
+            fontweight="bold", va="center", zorder=3)
+    bullet_block(ax, MARGIN + 56, cy + 420, [
+        ["Why the fan is spinning when", "nothing is open."],
         ["What that program you don't recognize is."],
         ["Who any program is talking to right now."],
-    ], dot="#C87F2E", color="#F2E4CC", gap=16)
+    ], dot=ORANGE, color=MUTED, gap=14)
 
-    # Arrow between panels
-    ax.annotate("", xy=(908, 450), xytext=(742, 450),
-                arrowprops=dict(arrowstyle="-|>", color=CYAN, lw=3.4))
+    # Arrow between cards
+    ax.annotate("", xy=(MARGIN + cw + 116, cy + ch / 2), xytext=(MARGIN + cw + 16, cy + ch / 2),
+                arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=3.2))
 
     # Right: AutoCommand
-    rx, ry, rw, rh = 870, 210, 690, 480
-    panel(ax, rx, ry, rw, rh, edge=CYAN_DIM, lw=2.4)
-    topbar(ax, rx, ry, rw, CYAN)
-    ax.text(rx + 30, ry + 56, "AUTOCOMMAND", color=CYAN, fontsize=23, fontweight="bold", va="center")
-    bullet_block(ax, rx + 54, ry + 108, [
-        ["Shows every program talking to the internet", "— live, in one list."],
-        ["Names each one in plain English: “Chrome's", "updater, downloading from Google.”"],
-        ["Explains the weird ones before you worry —", "and remembers what it saw, so yesterday's", "mystery is still solvable."],
-        ["One click stops anything you don't like.", "Undo works too."],
+    rx = MARGIN + cw + 132
+    card(ax, rx, cy, cw, ch)
+    ax.text(rx + 32, cy + 54, "AUTOCOMMAND", color=BLUE, fontsize=24,
+            fontweight="bold", va="center", zorder=3)
+    bullet_block(ax, rx + 56, cy + 106, [
+        ["Shows every program talking to the", "internet — live, in one list."],
+        ["Names each one in plain English:", "“Chrome's updater, downloading", "from Google.”"],
+        ["Explains the weird ones before you", "worry — and remembers what it saw,", "so yesterday's mystery is still", "solvable tomorrow."],
+        ["One click stops anything you don't", "like. Undo works too."],
+    ], dot=BLUE, gap=14)
+
+    # Bottom: what it costs / where it runs
+    pill_row(ax, fig, 816, [
+        "FREE FOREVER", "OPEN SOURCE", "NO ACCOUNT NEEDED", "RUNS ON YOUR PC",
+        ("NOTHING LEAVES IT", True),
     ])
+    ax.text(W / 2, 872, "No subscription, no upsells, no cloud. Anyone can read the code and see exactly what it does.",
+            color=MUTED, fontsize=18, ha="center", va="center", zorder=3)
 
-    # Bottom band: what it costs / where it runs
-    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
-    chip(ax, 84, 768, "FREE FOREVER")
-    chip(ax, 330, 768, "OPEN SOURCE")
-    chip(ax, 576, 768, "NO ACCOUNT NEEDED")
-    chip(ax, 890, 768, "RUNS ON YOUR PC")
-    chip(ax, 1204, 768, "NOTHING LEAVES IT", color=GREEN, edge="#2E7D5B")
-    ax.text(W / 2, 838, "No subscription, no upsells, no cloud. Anyone can read the code and see exactly what it does.",
-            color=SUB, fontsize=18, ha="center", va="center")
-
-    footer(ax, "Works alongside your antivirus — it's the magnifying glass your guard dog was missing.")
-    fig.savefig(os.path.join(OUT, "oss_alternative_infographic.png"), dpi=150)
+    green_footer(ax, 906, "Works alongside your antivirus — it's the magnifying glass your guard dog was missing.")
+    fig.savefig(os.path.join(OUT, "oss_alternative_infographic.png"), dpi=150, facecolor=PAGE)
     plt.close(fig)
 
 
@@ -169,69 +221,42 @@ def plain_english():
            "See something odd? Ask in plain English.",
            "You don't read logs. You shouldn't have to.")
 
-    steps = [
-        ("1", "SEE IT", CYAN, [
+    step_cards(ax, fig, [
+        ("1", "SEE IT", [
             "Every program that talks",
             "to the internet, in one list.",
             "",
             "Each row names the program,",
-            "shows where it's connected,",
-            "and how much it's sending —",
-            "like a phone bill for your PC.",
+            "shows where it connects and",
+            "how much it sends — like a",
+            "phone bill for your PC.",
         ]),
-        ("2", "ASK ABOUT IT", ORANGE, [
-            "Ask the way you'd say it",
-            "out loud: “What is this?",
-            "Should I worry?”",
+        ("2", "ASK ABOUT IT", [
+            "Click any row: who started",
+            "it, where it goes.",
             "",
-            "The built-in helper investigates",
-            "and answers in plain words.",
-            "It shows its work — nothing",
-            "is guessed.",
+            "Use an AI assistant? Invite",
+            "it in — Be My Guest — to",
+            "read the same facts, while",
+            "you watch every question.",
         ]),
-        ("3", "STOP IT", GREEN, [
+        ("3", "STOP IT", [
             "Don't like what you see?",
             "One click blocks it.",
             "",
             "Windows needs some of these",
-            "programs, so AutoCommand warns",
-            "you before anything important",
-            "is touched — and every block",
-            "has an undo.",
+            "programs, so AutoCommand",
+            "warns you before anything",
+            "important is touched — and",
+            "every block has an undo.",
         ]),
-    ]
+    ])
 
-    pw, gap = 474, 34
-    x0 = (W - (3 * pw + 2 * gap)) / 2
-    for i, (num, title, accent, lines) in enumerate(steps):
-        x = x0 + i * (pw + gap)
-        panel(ax, x, 210, pw, 470, edge=CYAN_DIM, lw=2.2)
-        topbar(ax, x, 210, pw, accent)
-        ax.text(x + pw / 2, 272, num, color=accent, fontsize=40, fontweight="bold",
-                ha="center", va="center",
-                bbox=dict(boxstyle="circle,pad=0.3", facecolor=PANEL, edgecolor=accent, lw=2.6))
-        ax.text(x + pw / 2, 362, title, color=TXT, fontsize=23, fontweight="bold",
-                ha="center", va="center")
-        yy = 400
-        first = True
-        for seg in lines:
-            if seg:
-                ax.text(x + pw / 2, yy, seg, color=TXT if first else SUB,
-                        fontsize=17, ha="center", va="center")
-                first = False
-            yy += 33
-        if i < 2:
-            ax.annotate("", xy=(x + pw + gap - 5, 440), xytext=(x + pw + 5, 440),
-                        arrowprops=dict(arrowstyle="-|>", color=CYAN_DIM, lw=3.0))
-
-    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
-    ax.text(W / 2, 772, "Real example: “svchost.exe is uploading packets” turned out to be Chrome's updater",
-            color=TXT, fontsize=19, ha="center", va="center", fontweight="bold")
-    ax.text(W / 2, 822, "pulling from Google's own download servers. AutoCommand proved it in one row — no panic, no reinstall.",
-            color=SUB, fontsize=17.5, ha="center", va="center")
-
-    footer(ax, "Three steps: see it, ask about it, stop it. That's the whole skill required.")
-    fig.savefig(os.path.join(OUT, "plain_english_infographic.png"), dpi=150)
+    blue_band(ax, 786, 118,
+              "Real example: “svchost.exe is uploading packets” turned out to be Chrome's updater",
+              "pulling from Google's own download servers — proven in one row. No panic, no reinstall.")
+    green_footer(ax, 924, "Three steps: see it, ask about it, stop it. That's the whole skill required.")
+    fig.savefig(os.path.join(OUT, "plain_english_infographic.png"), dpi=150, facecolor=PAGE)
     plt.close(fig)
 
 
@@ -242,70 +267,44 @@ def first_five_minutes():
            "Try it in five minutes.",
            "No installer, no account, no obligation — look around and see what your PC is doing.")
 
-    steps = [
-        ("1", "OPEN IT", CYAN, [
-            "Download the zip and unzip it",
-            "anywhere — no installer.",
+    step_cards(ax, fig, [
+        ("1", "OPEN IT", [
+            "Download the zip and unzip",
+            "it anywhere — no installer.",
             "",
-            "Right-click AutoCommand.exe →",
-            "Run as administrator.",
+            "Right-click AutoCommand.exe",
+            "→ Run as administrator.",
             "",
             "(That lets it see the whole",
             "machine, not just your files.)",
         ]),
-        ("2", "LOOK AROUND", ORANGE, [
+        ("2", "LOOK AROUND", [
             "The first screen lists every",
             "program talking to the",
-            "internet right now — most are",
-            "ordinary Windows parts.",
+            "internet right now — most",
+            "are ordinary Windows parts.",
             "",
             "Click any row to see who",
             "started it and where it goes.",
             "Looking changes nothing.",
         ]),
-        ("3", "ASK SOMETHING", GREEN, [
+        ("3", "ASK SOMETHING", [
             "See a name you don't know?",
+            "Click it: who started it,",
+            "where it goes.",
             "",
-            "Ask the built-in helper,",
-            "like you'd ask a person:",
-            "“What is this? Should I worry?”",
-            "",
-            "You get a plain-English answer",
-            "— and a Block button.",
+            "Use an AI assistant? Invite",
+            "it in — Be My Guest — to",
+            "read the same facts.",
+            "A Block button is nearby.",
         ]),
-    ]
+    ])
 
-    pw, gap = 474, 34
-    x0 = (W - (3 * pw + 2 * gap)) / 2
-    for i, (num, title, accent, lines) in enumerate(steps):
-        x = x0 + i * (pw + gap)
-        panel(ax, x, 210, pw, 470, edge=CYAN_DIM, lw=2.2)
-        topbar(ax, x, 210, pw, accent)
-        ax.text(x + pw / 2, 272, num, color=accent, fontsize=40, fontweight="bold",
-                ha="center", va="center",
-                bbox=dict(boxstyle="circle,pad=0.3", facecolor=PANEL, edgecolor=accent, lw=2.6))
-        ax.text(x + pw / 2, 362, title, color=TXT, fontsize=23, fontweight="bold",
-                ha="center", va="center")
-        yy = 400
-        first = True
-        for seg in lines:
-            if seg:
-                ax.text(x + pw / 2, yy, seg, color=TXT if first else SUB,
-                        fontsize=17, ha="center", va="center")
-                first = False
-            yy += 33
-        if i < 2:
-            ax.annotate("", xy=(x + pw + gap - 5, 440), xytext=(x + pw + 5, 440),
-                        arrowprops=dict(arrowstyle="-|>", color=CYAN_DIM, lw=3.0))
-
-    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
-    ax.text(W / 2, 772, "If you can use a web browser, you can use this.",
-            color=TXT, fontsize=19, ha="center", va="center", fontweight="bold")
-    ax.text(W / 2, 822, "No installer, no account, no subscription — and deleting the folder uninstalls it completely.",
-            color=SUB, fontsize=17.5, ha="center", va="center")
-
-    footer(ax, "Free forever · open source · nothing you do ever leaves your computer.")
-    fig.savefig(os.path.join(OUT, "first_five_minutes_infographic.png"), dpi=150)
+    blue_band(ax, 786, 118,
+              "If you can use a web browser, you can use this.",
+              "No installer, no account, no subscription — and deleting the folder uninstalls it completely.")
+    green_footer(ax, 924, "Free forever · open source · nothing you do ever leaves your computer.")
+    fig.savefig(os.path.join(OUT, "first_five_minutes_infographic.png"), dpi=150, facecolor=PAGE)
     plt.close(fig)
 
 
@@ -316,8 +315,7 @@ def row_anatomy():
            "One row, five things to know.",
            "The main screen is a list of rows like this one — here's how to read it.")
 
-    panel(ax, 40, 210, W - 80, 470, edge=CYAN_DIM, lw=2.2)
-    topbar(ax, 40, 210, W - 80, CYAN)
+    card(ax, MARGIN, 196, W - 2 * MARGIN, 516)
 
     rows_ = [
         ("WHO", "chrome.exe — the program's name",
@@ -332,21 +330,21 @@ def row_anatomy():
          "Windows needs some of these, so it warns you first — and a panic button restores everything."),
     ]
 
-    y = 268
+    y = 252
     for label, example, explain in rows_:
-        chip(ax, 84, y + 15, label, size=15)
-        ax.text(270, y, example, color=TXT, fontsize=17.5, va="center", fontweight="bold")
-        ax.text(270, y + 32, explain, color=SUB, fontsize=16, va="center")
-        y += 84
+        chip(ax, 88, y, label)
+        ax.text(260, y, example, color=TEXT, fontsize=19, va="center",
+                fontweight="bold", zorder=3)
+        ax.text(260, y + 30, explain, color=MUTED, fontsize=17, va="center", zorder=3)
+        if label != "BUTTONS":
+            divider(ax, 88, y + 58, W - 2 * MARGIN - 64)
+        y += 88
 
-    panel(ax, 40, 714, W - 80, 168, edge=PANEL_EDGE, alpha=0.95)
-    ax.text(W / 2, 772, "When a row surprises you, that's the moment to click it or ask the helper — not before.",
-            color=TXT, fontsize=19, ha="center", va="center", fontweight="bold")
-    ax.text(W / 2, 822, "You don't have to understand every row. Most people never need to.",
-            color=SUB, fontsize=17.5, ha="center", va="center")
-
-    footer(ax, "Every label on this screen is something the app actually shows you — no guessing.")
-    fig.savefig(os.path.join(OUT, "row_anatomy_infographic.png"), dpi=150)
+    blue_band(ax, 748, 112,
+              "When a row surprises you, that's the moment to click it — or invite a second opinion.",
+              "You don't have to understand every row. Most people never need to.")
+    green_footer(ax, 880, "Every label on this screen is something the app actually shows you — no guessing.")
+    fig.savefig(os.path.join(OUT, "row_anatomy_infographic.png"), dpi=150, facecolor=PAGE)
     plt.close(fig)
 
 

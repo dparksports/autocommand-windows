@@ -1,8 +1,8 @@
-"""AutoCommand README infographics — Fluent light theme, matching the app.
+"""AutoCommand README infographics — Z.ai Chat Recovery house style.
 
-Same palette as ThemeService Light: canvas #F0F2F6, white cards, hairline
-#D9DEE7 borders, muted blue #2F74B5 accent, text #1A1D23 / #5B6472.
-Single-hue blue identity (no secondary accent colors), soft card shadows.
+Same palette as the recovery repo's assets/*.svg: canvas #F5F5F7, white
+cards with #E5E5EA hairline borders, #007AFF accent, text #1D1D1F / #86868B.
+Font is Segoe UI (fallback DejaVu Sans), sized generously for readability.
 
 Design rules (unchanged): ONE headline (<= 7 words), ONE subline (<= 12 words),
 exactly 3 steps: big number + 2-4 word label + ONE line of <= 9 words.
@@ -20,18 +20,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, FancyBboxPatch
 
-matplotlib.rcParams["font.family"] = "DejaVu Sans"
+matplotlib.rcParams["font.family"] = ["Segoe UI", "DejaVu Sans"]
 
-# ── Fluent light palette (identical to the app's ThemeService) ───────────
-PAGE = "#F0F2F6"
+# ── recovery-style light palette (Z.ai Chat Recovery assets) ──────────────
+PAGE = "#F5F5F7"
 CARD = "#FFFFFF"
-BORDER = "#D9DEE7"
-TEXT = "#1A1D23"
-MUTED = "#5B6472"
-BLUE = "#2F74B5"        # primary accent
-BLUE_BRIGHT = "#3E86D6" # gradient partner
-BLUE_SOFT = "#E2EAF4"   # nav/selection tint
-SHADOW = "#94A3B8"      # card shadow tint
+BORDER = "#E5E5EA"
+TEXT = "#1D1D1F"
+MUTED = "#86868B"
+BLUE = "#007AFF"        # primary accent
+BLUE_SOFT = "#E5F1FF"   # selection tint
 
 W, H = 2250, 1410
 MARGIN = 130
@@ -46,11 +44,6 @@ def canvas():
     ax.invert_yaxis()
     ax.axis("off")
     fig.patch.set_facecolor(PAGE)
-    # top accent bar: the app's blue→blue identity gradient, simplified two-tone
-    ax.add_patch(FancyBboxPatch((0, 0), W / 2, 10, boxstyle="round,pad=0,rounding_size=0",
-                                linewidth=0, facecolor=BLUE))
-    ax.add_patch(FancyBboxPatch((W / 2, 0), W / 2, 10, boxstyle="round,pad=0,rounding_size=0",
-                                linewidth=0, facecolor=BLUE_BRIGHT))
     return fig, ax
 
 
@@ -70,15 +63,13 @@ def header(ax, fig, kicker, title, subline):
 
 
 def step_card(ax, x, y, w, h, num, label, line):
-    # Fluent floating card: soft shadow, then white surface + hairline border
-    ax.add_patch(FancyBboxPatch((x + 6, y + 10), w, h, boxstyle="round,pad=0,rounding_size=28",
-                                linewidth=0, facecolor=SHADOW, alpha=0.16))
+    # white surface + hairline border, solid blue number circle
     ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0,rounding_size=28",
-                                linewidth=1.6, edgecolor=BORDER, facecolor=CARD))
+                                linewidth=1.8, edgecolor=BORDER, facecolor=CARD))
     cx = x + 110
     cy = y + h / 2
-    ax.add_patch(Circle((cx, cy), 56, facecolor=BLUE_SOFT, edgecolor="none"))
-    ax.text(cx, cy, str(num), fontsize=40, color=BLUE, fontweight="bold",
+    ax.add_patch(Circle((cx, cy), 56, facecolor=BLUE, edgecolor="none"))
+    ax.text(cx, cy, str(num), fontsize=40, color="#FFFFFF", fontweight="bold",
             ha="center", va="center")
     x_text = x + 205
     usable = w - 205 - 70
@@ -101,9 +92,9 @@ def pill_row(ax, fig, items, y, fontsize=23):
     renderer = fig.canvas.get_renderer()
     px = MARGIN
     for p in items:
-        t = ax.text(px, y, p, fontsize=fontsize, color=BLUE, va="center", fontweight="bold",
+        t = ax.text(px, y, p, fontsize=fontsize, color=TEXT, va="center", fontweight="bold",
                     bbox=dict(boxstyle="round,pad=0.65", facecolor=CARD,
-                              edgecolor=BLUE, linewidth=2))
+                              edgecolor=BORDER, linewidth=1.8))
         bb = t.get_window_extent(renderer=renderer).transformed(ax.transData.inverted())
         px = bb.x1 + 55
 
