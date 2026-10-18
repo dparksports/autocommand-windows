@@ -17,8 +17,9 @@ using AutoCommand.Services;
 namespace AutoCommand.Views
 {
     /// <summary>
-    /// Taskhostw Spawns tab: the same Sysmon spawn tracing the Python tab
-    /// uses (ImageSpawnWatcherService with the taskhostw filter), answering
+    /// Taskhostw Spawns feed (the "Scheduled Tasks" segment of the Spawns
+    /// tab): the same Sysmon spawn tracing the Python feed uses
+    /// (ImageSpawnWatcherService with the taskhostw filter), answering
     /// who/what/when — with the "why" being the scheduled task. There is no
     /// instrumentation story here (no audit hook, no TLS): taskhostw is a
     /// Windows binary, so the attribution pane joins TaskAttributionService
@@ -61,7 +62,10 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
-        // Lifecycle: lazy start on first tab selection, stop on tab leave
+        // Lifecycle: lazy start on first show; a recorder must not stop
+        // because the user looked at another tab or another Spawns feed.
+        // Coverage runs until the user presses Stop Watch (or the app exits)
+        // — same lifetime policy as the svchost trace feed.
         // -----------------------------------------------------------------------
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -85,7 +89,15 @@ namespace AutoCommand.Views
             if (!_watching) StartWatching();
         }
 
-        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => StopWatching();
+        private void UserControl_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // Deliberately keeps watching. The watcher and the attribution
+            // timer are event/Dispatcher-driven and safe to run while the
+            // view is out of the tree; Stop Watching remains the only stop.
+        }
+
+        /// <summary>Live state for the Spawns host's feed indicator.</summary>
+        public bool IsWatching => _watching;
 
         private void StartWatching()
         {

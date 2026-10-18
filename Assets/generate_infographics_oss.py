@@ -19,6 +19,7 @@ Outputs: Assets/oss_alternative_infographic.png    (antivirus vs AutoCommand)
          Assets/plain_english_infographic.png      (see it / ask / stop it)
          Assets/first_five_minutes_infographic.png (getting started)
          Assets/row_anatomy_infographic.png        (how to read one row)
+         Assets/app_map_infographic.png            (grouped sidebar + Spawns)
 Requires: matplotlib, numpy  (py -m pip install matplotlib numpy)
 """
 import os
@@ -308,6 +309,64 @@ def first_five_minutes():
     plt.close(fig)
 
 
+# ============================================================ 5: where everything lives
+def app_map():
+    fig, ax = new_canvas()
+    header(ax, "AUTOCOMMAND  •  WHERE EVERYTHING LIVES",
+           "Watch it, contain it, set it up.",
+           "The sidebar groups its tools by the question you're asking — nothing hides.")
+
+    # Three group cards, colored like the app's accent usage: blue = watch,
+    # orange = contain, green = system. Same geometry as the step cards so
+    # the set reads as one family.
+    cy, ch = 196, 560
+    gap = 36
+    cw = (W - 2 * MARGIN - 2 * gap) / 3
+    groups = [
+        ("WATCH", BLUE, "what's happening", [
+            ("Process Monitor", "every connection, live"),
+            ("Spawns", "who launched what, and why"),
+            ("BITS Transfers", "background downloads & uploads"),
+            ("Traffic Patterns", "history, hosts, beacons"),
+        ], "Spawns"),
+        ("CONTAIN", ORANGE, "stop things", [
+            ("Firewall", "rules and blocks — undo included"),
+            ("Black Hole", "telemetry domains, sinkholed"),
+            ("Windows Defender", "the built-in antivirus, visible"),
+        ], None),
+        ("SYSTEM", GREEN, "set it up", [
+            ("Be My Guest", "invite your AI assistant"),
+            ("Data & Privacy + OneSettings", "what leaves, what phones home"),
+            ("Sysmon Audit + Settings", "engine health and preferences"),
+        ], None),
+    ]
+    for i, (name, color, tagline, items, highlight) in enumerate(groups):
+        x = MARGIN + i * (cw + gap)
+        card(ax, x, cy, cw, ch)
+        # group dot + name + tagline
+        ax.add_patch(Circle((x + 44, cy + 54), 9, facecolor=color, edgecolor="none", zorder=3))
+        ax.text(x + 64, cy + 54, name, color=color, fontsize=23, fontweight="bold",
+                va="center", zorder=3)
+        ax.text(x + 64, cy + 88, tagline, color=MUTED, fontsize=16.5, va="center", zorder=3)
+        divider(ax, x + 32, cy + 112, cw - 64)
+        yy = cy + 152
+        for item_name, item_desc in items:
+            if item_name == highlight:
+                # the merged Spawns tab gets the selection tint the app uses
+                card(ax, x + 18, yy - 26, cw - 36, 78, face=BLUE_TINT, edge="none", rounding=12)
+            ax.text(x + 40, yy, item_name, color=TEXT, fontsize=19.5, fontweight="bold",
+                    va="center", zorder=3)
+            ax.text(x + 40, yy + 29, item_desc, color=MUTED, fontsize=16.5, va="center", zorder=3)
+            yy += 96
+
+    blue_band(ax, 786, 118,
+              "The three trace tabs became one Spawns tab: Scheduled Tasks, Python and the svchost Timeline.",
+              "A green dot marks each feed that's recording — and feeds keep recording while you browse elsewhere.")
+    green_footer(ax, 924, "Same tools, fewer places to look — watching no longer stops because you clicked away.")
+    fig.savefig(os.path.join(OUT, "app_map_infographic.png"), dpi=150, facecolor=PAGE)
+    plt.close(fig)
+
+
 # ============================================================ 4: how to read one row
 def row_anatomy():
     fig, ax = new_canvas()
@@ -353,5 +412,7 @@ if __name__ == "__main__":
     plain_english()
     first_five_minutes()
     row_anatomy()
+    app_map()
     print("wrote oss_alternative_infographic.png, plain_english_infographic.png, "
-          "first_five_minutes_infographic.png, row_anatomy_infographic.png")
+          "first_five_minutes_infographic.png, row_anatomy_infographic.png, "
+          "app_map_infographic.png")

@@ -22,9 +22,15 @@ That's the whole tutorial. Looking changes nothing; deleting the folder uninstal
 
 ## What am I looking at?
 
-![How to read one row](Assets/row_anatomy_infographic.png?v=oss3)
+![How to read one row](Assets/row_anatomy_infographic.png?v=oss2)
 
 The main screen is a list of rows — one per connection. Every row tells you who's talking, to whom, how much, for how long, and gives you a Block button (with an undo, and a panic button that restores everything). When a row surprises you, *that's* the moment to click it or ask for a second opinion — not before. Most rows, you'll never need to think about.
+
+## Where everything lives
+
+![Where everything lives](Assets/app_map_infographic.png?v=oss3)
+
+The sidebar groups its tools by the question you're asking. **Watch** is everything that shows what's happening — including **Spawns**, one tab for "who launched this?": scheduled-task launches, Python programs and the svchost timeline sit side by side there, each with a dot that glows green while it records. **Contain** holds the stopping tools (firewall, telemetry sinkholes, Defender). **System** is the rest: AI access, privacy, settings. And watching never stops just because you looked at another screen — a feed runs until you stop it, not until you click away.
 
 ## When something looks odd
 

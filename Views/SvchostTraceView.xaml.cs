@@ -68,6 +68,9 @@ namespace AutoCommand.Views
         private int _flags;
         private bool _tracing;
 
+        /// <summary>Live state for the Spawns host's feed indicator.</summary>
+        public bool IsTracing => _tracing;
+
         public SvchostTraceView()
         {
             InitializeComponent();

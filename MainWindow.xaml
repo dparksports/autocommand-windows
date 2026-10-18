@@ -13,143 +13,143 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Main Content -->
-        <TabControl x:Name="MainTabControl" Grid.Row="0" TabStripPlacement="Left">
+        <!-- Main Content. The sidebar is grouped: WATCH (feeds that show what
+             the machine is doing), CONTAIN (blocking & defenses), SYSTEM
+             (everything configurational). Group headers are non-selectable
+             TabItems; entries are single-line so all 12 fit without
+             scrolling. SelectedIndex=1 skips the WATCH header explicitly. -->
+        <TabControl x:Name="MainTabControl" Grid.Row="0" TabStripPlacement="Left" SelectedIndex="1">
+
+            <!-- ═══ WATCH ═══ -->
+            <TabItem IsEnabled="False" Focusable="False">
+                <TabItem.Header>
+                    <TextBlock Text="WATCH" FontSize="10" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,0,0,2"
+                               ToolTip="Feeds that show what this machine is running and where it connects."/>
+                </TabItem.Header>
+            </TabItem>
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🔍" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Process Monitor" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔍" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Process Monitor" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:SvchostMonitorView x:Name="SvchostTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="📊" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Traffic Patterns" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🧬" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Spawns" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:SpawnsView x:Name="SpawnsTab"/>
+            </TabItem>
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📥" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="BITS Transfers" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:BitsView x:Name="BitsTab"/>
+            </TabItem>
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📊" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Traffic Patterns" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:TrafficPatternsView x:Name="TrafficPatternsTab"/>
             </TabItem>
 
+            <!-- ═══ CONTAIN ═══ -->
+            <TabItem IsEnabled="False" Focusable="False">
+                <TabItem.Header>
+                    <TextBlock Text="CONTAIN" FontSize="10" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,10,0,2"
+                               ToolTip="Blocking, sinkholing and defenses — actions that stop things."/>
+                </TabItem.Header>
+            </TabItem>
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🛡" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Firewall" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🛡" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Firewall" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:FirewallSettingsView x:Name="FirewallTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🔬" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Svchost Trace" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <views:SvchostTraceView x:Name="SvchostTraceTab"/>
-            </TabItem>
-
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🧵" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Taskhostw Spawns" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <views:TaskHostSpawnView x:Name="TaskhostwSpawnsTab"/>
-            </TabItem>
-
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🐍" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Python Spawns" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <views:PythonSpawnView x:Name="PythonSpawnsTab"/>
-            </TabItem>
-
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🚫" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Black Hole" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🚫" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Black Hole" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:BlackHoleView x:Name="BlackHoleTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🧭" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Sysmon Audit" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <views:SysmonStatusView x:Name="SysmonTab"/>
-            </TabItem>
-
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🦠" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Windows Defender" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🦠" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Windows Defender" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:DefenderView x:Name="DefenderTab"/>
             </TabItem>
 
-            <TabItem>
+            <!-- ═══ SYSTEM ═══ -->
+            <TabItem IsEnabled="False" Focusable="False">
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🔐" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Data &amp; Privacy" HorizontalAlignment="Center"/>
-                    </StackPanel>
+                    <TextBlock Text="SYSTEM" FontSize="10" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,10,0,2"
+                               ToolTip="AI access, privacy, Windows telemetry, Sysmon health and app settings."/>
                 </TabItem.Header>
-                <views:PrivacyView x:Name="PrivacyTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🤖" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Be My Guest" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🤖" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Be My Guest" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:BeMyGuestView x:Name="BeMyGuestTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="🔄" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="OneSettings" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔐" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Data &amp; Privacy" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:PrivacyView x:Name="PrivacyTab"/>
+            </TabItem>
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔄" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="OneSettings" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:OneSettingsView x:Name="OneSettingsTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="📥" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="BITS Transfers" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🧭" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Sysmon Audit" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
-                <views:BitsView x:Name="BitsTab"/>
+                <views:SysmonStatusView x:Name="SysmonTab"/>
             </TabItem>
-
             <TabItem>
                 <TabItem.Header>
-                    <StackPanel Width="160" Margin="0,10">
-                        <TextBlock Text="⚙" FontSize="24" HorizontalAlignment="Center" Margin="0,0,0,4"/>
-                        <TextBlock Text="Settings" HorizontalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⚙" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Settings" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
                 <views:SettingsView x:Name="SettingsTab"/>

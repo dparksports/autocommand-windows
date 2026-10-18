@@ -16,7 +16,8 @@ using AutoCommand.Services;
 namespace AutoCommand.Views
 {
     /// <summary>
-    /// Python Spawns tab: Sysmon-backed spawn tracing (who/what/when), the
+    /// Python Spawns feed (the "Python" segment of the Spawns tab):
+    /// Sysmon-backed spawn tracing (who/what/when), the
     /// audit-hook join for the Python stack at spawn (why), and per-flow TLS
     /// plaintext (what they send) for instrumented environments.
     /// </summary>
@@ -56,7 +57,11 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
-        // Lifecycle: lazy start on first tab selection, stop on tab leave
+        // Lifecycle: lazy start on first show; a recorder must not stop
+        // because the user looked at another tab or another Spawns feed.
+        // Coverage runs until the user presses Stop Watch (or the app exits);
+        // the shared raw-socket capture is refcounted, so the AddRef taken
+        // here is balanced by an explicit Stop Watch or app shutdown.
         // -----------------------------------------------------------------------
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -69,7 +74,13 @@ namespace AutoCommand.Views
             if (!_watching) StartWatching();
         }
 
-        private void UserControl_Unloaded(object sender, RoutedEventArgs e) => StopWatching();
+        private void UserControl_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // Deliberately keeps watching (see above).
+        }
+
+        /// <summary>Live state for the Spawns host's feed indicator.</summary>
+        public bool IsWatching => _watching;
 
         private void InitializeServices()
         {

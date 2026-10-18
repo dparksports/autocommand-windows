@@ -90,7 +90,7 @@
                             <Border CornerRadius="8" Padding="6,1" HorizontalAlignment="Left"
                                     Background="{Binding VerdictBackground}" Visibility="{Binding VerdictVisibility}"
                                     ToolTip="Inbox: Microsoft task running Microsoft code · Third-party: custom task or handler outside the system directories · Orphaned: handler DLL is gone">
-                                <TextBlock Text="{Binding Verdict}" FontSize="10" Foreground="#E5C77B"/>
+                                <TextBlock Text="{Binding Verdict}" FontSize="10" Foreground="{Binding VerdictForeground}"/>
                             </Border>
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>

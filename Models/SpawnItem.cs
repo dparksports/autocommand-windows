@@ -100,6 +100,7 @@ namespace AutoCommand.Models
             OnPropertyChanged(nameof(Verdict));
             OnPropertyChanged(nameof(VerdictVisibility));
             OnPropertyChanged(nameof(VerdictBackground));
+            OnPropertyChanged(nameof(VerdictForeground));
         }
 
         /// <summary>Lifecycle flag — flipped by the EID 5 (process terminate) watcher.</summary>
@@ -151,6 +152,17 @@ namespace AutoCommand.Models
             "Third-party" => "#6B4E1A",
             "Orphaned" => "#6E2A2A",
             _ => "#2A2A33"
+        };
+
+        /// <summary>Chip text per verdict, matched to its background so the
+        /// three states read apart at a glance: Inbox calm green, Third-party
+        /// amber, Orphaned alert red.</summary>
+        [JsonIgnore]
+        public string VerdictForeground => _verdict switch
+        {
+            "Inbox" => "#7ED8A0",
+            "Orphaned" => "#F2A0B4",
+            _ => "#E5C77B"
         };
 
         /// <summary>"PID (name)" for the parent column; "—" when Sysmon gave no parent image.</summary>
