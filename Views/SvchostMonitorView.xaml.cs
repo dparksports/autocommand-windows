@@ -32,9 +32,10 @@ namespace AutoCommand.Views
         private DispatcherTimer _lastSeenRefreshTimer;
         private readonly string _csvPath = "ultimate_autopilot_stats.csv";
 
-        // Firewall blocks created from this monitor, persisted in blocked.txt
-        private readonly List<BlockedEntry> _blockedEntries = new();
-        private readonly string _blockedPath = "blocked.txt";
+        // Firewall blocks created from this monitor live in BlocksStore (v3
+        // blocks.txt under %LOCALAPPDATA%\AutoCommand) — service identity is
+        // captured at block time because the PID (and with it the identity)
+        // dies with the process.
 
         // Live firewall truth for row marking: which remote IPs / executable
         // paths have block rules (any enabled rule = active, all disabled =
@@ -62,8 +63,38 @@ namespace AutoCommand.Views
         // Scheduled-task attribution for taskhostw rows (who/what/why launched)
         private readonly TaskAttributionService _taskAttribution = new();
 
+        /// <summary>The live monitor instance — the Blocks tab reads current
+        /// connections from it for its "last traffic" column.</summary>
+        public static SvchostMonitorView Current { get; private set; }
+
+        /// <summary>Newest live row still talking to this IP, or null — the
+        /// Blocks tab's freshest "last traffic" source (beats the archive).</summary>
+        public SvchostMonitorItem LiveRowForIp(string ip)
+        {
+            SvchostMonitorItem best = null;
+            foreach (var item in _trackedIps.Values)
+            {
+                if (!string.Equals(item.RemoteIp, ip, StringComparison.OrdinalIgnoreCase)) continue;
+                if (best == null || item.LastSeen > best.LastSeen) best = item;
+            }
+            return best;
+        }
+
+        /// <summary>Newest live row for an executable path, or null.</summary>
+        public SvchostMonitorItem LiveRowForPath(string path)
+        {
+            SvchostMonitorItem best = null;
+            foreach (var item in _trackedIps.Values)
+            {
+                if (!string.Equals(item.ImagePath, path, StringComparison.OrdinalIgnoreCase)) continue;
+                if (best == null || item.LastSeen > best.LastSeen) best = item;
+            }
+            return best;
+        }
+
         public SvchostMonitorView()
         {
+            Current = this;
             InitializeComponent();
             SvchostGrid.ItemsSource = _uiCollection;
 
@@ -762,17 +793,58 @@ namespace AutoCommand.Views
         // Firewall blocking (remote IP / process)
         // -----------------------------------------------------------------------
 
-        /// <summary>A firewall block created from this monitor, persisted in blocked.txt.</summary>
-        private sealed class BlockedEntry
+        /// <summary>
+        /// Builds the v3 block record from everything the monitor row knows
+        /// RIGHT NOW — the moment identity is richest. The PID dies later;
+        /// the record must not.
+        /// </summary>
+        private static BlockRecord BuildBlockRecord(SvchostMonitorItem item, string kind, string key)
         {
-            public string Kind;         // "ip" or "proc"
-            public string Key;          // remote IP or executable path
-            public string ProcessName;
-            public DateTime Timestamp;
+            string serviceKey = "", display = "";
+            string attrib = "none";
 
-            public override string ToString() => Kind == "ip"
-                ? $"IP  {Key}  ({ProcessName}, blocked {Timestamp:yyyy-MM-dd HH:mm})"
-                : $"EXE {Key}  ({ProcessName}, blocked {Timestamp:yyyy-MM-dd HH:mm})";
+            if (item != null && item.IsSvchost)
+            {
+                // Identity preference: the -s declared single tenant, then the
+                // first SCM-resident service, then the -k group, then unknown.
+                string csv = item.HostedServicesCsv;
+                string declared = item.DeclaredService;
+                if (!string.IsNullOrEmpty(declared))
+                    serviceKey = declared.ToLowerInvariant();
+                else if (!string.IsNullOrEmpty(csv))
+                    serviceKey = csv.Split(',')[0].Trim().ToLowerInvariant();
+                else if (!string.IsNullOrEmpty(item.SvchostGroup))
+                    serviceKey = "svchost:" + item.SvchostGroup.ToLowerInvariant();
+                if (serviceKey.Length > 0 && serviceKey != "svchost:unresolved")
+                    attrib = "live";
+                if (serviceKey.Length == 0) serviceKey = "svchost:unresolved";
+            }
+            else if (item != null && !string.IsNullOrEmpty(item.ProcessName) &&
+                     !item.ProcessName.StartsWith("<", StringComparison.Ordinal))
+            {
+                serviceKey = System.IO.Path.GetFileNameWithoutExtension(item.ProcessName).ToLowerInvariant();
+                attrib = "catalog";
+            }
+
+            if (serviceKey.Length > 0)
+                display = ServiceCatalog.TryGet(serviceKey, out var c) ? c.DisplayName : "";
+
+            return new BlockRecord
+            {
+                Kind = kind,
+                Key = key,
+                ProcessName = item?.ProcessName ?? "",
+                CreatedUtc = DateTime.UtcNow,
+                ServiceKey = serviceKey,
+                SvcDisplayName = display,
+                ClassAtBlock = kind == "ip"
+                    ? IpClassifier.Classify(key)
+                    : BlocksStore.ClassForPath(key),
+                Origin = "monitor",
+                Attrib = attrib,
+                Status = "on",
+                StatusUtc = DateTime.UtcNow,
+            };
         }
 
         private async void BlockRemoteIP_Click(object sender, RoutedEventArgs e)
@@ -833,7 +905,7 @@ namespace AutoCommand.Views
             {
                 string note = BuildProvenance(item, $"→ {ip}", confirmSuppressed);
                 var (created, updated) = await FirewallService.Instance.AddIpBlockAsync(ip, note);
-                RecordBlockedEntry("ip", ip, item.ProcessName);
+                RecordBlockedEntry(item, "ip", ip);
                 _ = RefreshBlockStateFromFirewallAsync();
                 ShowToast(created > 0
                         ? $"⛔ Blocked remote IP {ip} — 2 rules (outbound TCP/UDP).\nProvenance written to the rule description (visible in wf.msc)."
@@ -948,7 +1020,7 @@ namespace AutoCommand.Views
                 }
                 string note = BuildProvenance(item, $"app: {path}", confirmSuppressed, tags);
                 var (created, updated) = await FirewallService.Instance.AddAppBlockAsync(path, note);
-                RecordBlockedEntry("proc", path, item.ProcessName);
+                RecordBlockedEntry(item, "proc", path);
                 _ = RefreshBlockStateFromFirewallAsync();
                 string toast = created > 0
                     ? $"⛔ Blocked application (1 outbound rule):\n{path}"
@@ -1014,7 +1086,7 @@ namespace AutoCommand.Views
 
         private async void UnblockBtn_Click(object sender, RoutedEventArgs e)
         {
-            if (BlockedListBox.SelectedItem is not BlockedEntry entry) return;
+            if (BlockedListBox.SelectedItem is not BlockRecord entry) return;
             await ConfirmAndRemoveBlockAsync(entry.Kind, entry.Key);
         }
 
@@ -1035,8 +1107,7 @@ namespace AutoCommand.Views
                     ? await FirewallService.Instance.RemoveBlockRulesForIpAsync(key)
                     : await FirewallService.Instance.RemoveBlockRulesForAppAsync(key);
 
-                _blockedEntries.RemoveAll(b => b.Kind == kind && b.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-                SaveBlockedEntries();
+                BlocksStore.Remove(kind, key);
                 RefreshBlockedUi();
                 _ = RefreshBlockStateFromFirewallAsync();
                 ShowToast(removed > 0
@@ -1416,53 +1487,26 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
-        // blocked.txt persistence (format: kind|key|processName|timestamp)
+        // Block records — BlocksStore v3 persistence (see BlocksStore.cs)
         // -----------------------------------------------------------------------
 
-        private void RecordBlockedEntry(string kind, string key, string processName)
+        private void RecordBlockedEntry(SvchostMonitorItem item, string kind, string key)
         {
-            // One record per key — re-blocking refreshes it instead of duplicating
-            _blockedEntries.RemoveAll(b => b.Kind == kind && b.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
-            _blockedEntries.Add(new BlockedEntry { Kind = kind, Key = key, ProcessName = processName ?? "", Timestamp = DateTime.Now });
-            SaveBlockedEntries();
+            BlocksStore.AddOrUpdate(BuildBlockRecord(item, kind, key));
             RefreshBlockedUi();
         }
 
         private void LoadBlockedEntries()
         {
-            _blockedEntries.Clear();
-            try
-            {
-                foreach (string line in File.ReadAllLines(_blockedPath))
-                {
-                    string[] parts = line.Split('|');
-                    if (parts.Length < 4) continue;
-                    if (parts[0] != "ip" && parts[0] != "proc") continue;
-                    _blockedEntries.Add(new BlockedEntry
-                    {
-                        Kind = parts[0],
-                        Key = parts[1],
-                        ProcessName = parts[2],
-                        Timestamp = DateTime.TryParse(parts[3], out DateTime ts) ? ts : DateTime.Now
-                    });
-                }
-            }
-            catch { /* first run or unreadable file — start with an empty block list */ }
-        }
-
-        private void SaveBlockedEntries()
-        {
-            try
-            {
-                File.WriteAllLines(_blockedPath, _blockedEntries.Select(b => $"{b.Kind}|{b.Key}|{b.ProcessName}|{b.Timestamp:O}"));
-            }
-            catch { /* persistence is best-effort — the firewall rules themselves are the source of truth */ }
+            BlocksStore.Load(); // migrates legacy blocked.txt files once, in place
+            RefreshBlockedUi();
         }
 
         private void RefreshBlockedUi()
         {
-            BlockedListBtn.Content = $"Blocked: {_blockedEntries.Count}";
-            BlockedListBox.ItemsSource = _blockedEntries
+            var records = BlocksStore.Records;
+            BlockedListBtn.Content = $"Blocked: {records.Count}";
+            BlockedListBox.ItemsSource = records
                 .OrderBy(b => b.Kind).ThenBy(b => b.Key, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             RefreshConfirmPrefsUi();

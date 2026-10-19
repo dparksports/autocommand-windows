@@ -692,6 +692,66 @@ namespace AutoCommand.Services
             });
         }
 
+        /// <summary>
+        /// Per-target (and per-group, via a list) enable/disable — the toggle
+        /// behind the Blocks tab. Matching mirrors removal: IP blocks by rule
+        /// name prefix (new v2 + legacy), app blocks by name prefix plus exact
+        /// ApplicationName. Returns (rules matched, rules actually flipped).
+        /// </summary>
+        public Task<(int matched, int changed)> SetTargetsEnabledAsync(
+            IEnumerable<(string kind, string key)> targets, bool enabled)
+        {
+            return Task.Run(() =>
+            {
+                int matched = 0, changed = 0;
+                try
+                {
+                    var list = targets.ToList();
+                    var ipPrefixes = list.Where(t => t.kind == "ip")
+                        .Select(t => new[]
+                        {
+                            $"{NewIpPrefix}{t.key} (",
+                            $"{LegacyIpPrefix[0]}{t.key} ("
+                        })
+                        .SelectMany(p => p)
+                        .ToList();
+                    var appPaths = new HashSet<string>(
+                        list.Where(t => t.kind != "ip").Select(t => t.key),
+                        StringComparer.OrdinalIgnoreCase);
+
+                    dynamic fwPolicy = GetPolicy();
+                    foreach (dynamic rule in fwPolicy.Rules)
+                    {
+                        try
+                        {
+                            if (!IsOurBlock(rule, out string name)) continue;
+
+                            bool isIpRule = name.StartsWith(NewIpPrefix, StringComparison.OrdinalIgnoreCase) ||
+                                            name.StartsWith(LegacyIpPrefix[0], StringComparison.OrdinalIgnoreCase);
+                            if (isIpRule)
+                            {
+                                if (!ipPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+                                    continue;
+                            }
+                            else
+                            {
+                                string app = rule.ApplicationName ?? "";
+                                if (app.Length == 0 || !appPaths.Contains(app)) continue;
+                            }
+
+                            matched++;
+                            bool was = (bool)rule.Enabled;
+                            rule.Enabled = enabled;
+                            if (was != enabled) changed++;
+                        }
+                        catch { /* per-rule best effort */ }
+                    }
+                }
+                catch { /* caller surfaces the zero-change result */ }
+                return (matched, changed);
+            });
+        }
+
         /// <summary>Inventory of all AutoCommand block rules, grouped per target, classified.</summary>
         public Task<List<BlockedTarget>> GetBlockedInventoryAsync()
         {

@@ -306,6 +306,92 @@ namespace AutoCommand.Services
             SearchCore(1, null, null, max,
                 d => d.TryGetValue("ProcessId", out var v) && v == pid.ToString());
 
+        /// <summary>
+        /// The newest EID-3 connection attempt per requested destination IP —
+        /// ONE streaming pass over the archive (newest-first, early-exits
+        /// once every requested IP has a hit) instead of a full scan per IP.
+        /// Serves the Blocks tab's "last traffic" column and the block
+        /// attribution repair: Sysmon logs attempts even when the firewall
+        /// drops them, so blocked IPs still resolve. IPs with no archived
+        /// attempt are simply absent from the result.
+        /// </summary>
+        public static Dictionary<string, ArchiveEvent> NewestConnectionPerIp(
+            IEnumerable<string> ips, Func<ArchiveEvent, bool> accept = null) =>
+            NewestBy(3, new HashSet<string>(ips, StringComparer.OrdinalIgnoreCase),
+                e => e.Data.TryGetValue("DestinationIp", out string dip) ? dip : null, accept);
+
+        /// <summary>Same single-pass index, keyed by the connecting image
+        /// path — the proc-block twin of NewestConnectionPerIp.</summary>
+        public static Dictionary<string, ArchiveEvent> NewestConnectionPerImage(
+            IEnumerable<string> images, Func<ArchiveEvent, bool> accept = null) =>
+            NewestBy(3, new HashSet<string>(images, StringComparer.OrdinalIgnoreCase),
+                e => e.Data.TryGetValue("Image", out string img) && img.Length > 0 ? img : null, accept);
+
+        /// <summary>Newest EID-1 create-event per PID, single pass — the
+        /// batched replacement for per-PID SearchCreateEvents scans when a
+        /// repair needs creates for many PIDs at once.</summary>
+        public static Dictionary<string, ArchiveEvent> NewestCreateEventPerPid(
+            IEnumerable<int> pids) =>
+            NewestBy(1, new HashSet<string>(pids.Select(p => p.ToString())),
+                e => e.Data.TryGetValue("ProcessId", out string v) && v.Length > 0 ? v : null, null);
+
+        /// <summary>
+        /// One streaming newest-first walk of the archive for one event-id,
+        /// keeping the newest match per requested key. Early-exits once every
+        /// key is found. `contains` prefilter by eid keeps parsing cheap.
+        /// </summary>
+        private static Dictionary<string, ArchiveEvent> NewestBy(
+            int eid, HashSet<string> wanted, Func<ArchiveEvent, string> keyOf,
+            Func<ArchiveEvent, bool> accept)
+        {
+            var found = new Dictionary<string, ArchiveEvent>(StringComparer.OrdinalIgnoreCase);
+            if (wanted.Count == 0) return found;
+            string marker = $"\"eid\":{eid},";
+            try
+            {
+                if (!Directory.Exists(ArchiveDirectory)) return found;
+                var files = Directory.GetFiles(ArchiveDirectory, "sysmon-archive-*.jsonl")
+                    .OrderByDescending(f => f, StringComparer.Ordinal);
+                foreach (var file in files)
+                {
+                    if (wanted.Count == 0) break;
+                    var lines = File.ReadAllLines(file);
+                    for (int li = lines.Length - 1; li >= 0 && wanted.Count > 0; li--)
+                    {
+                        string line = lines[li];
+                        if (line.Length == 0 || line.IndexOf(marker, StringComparison.Ordinal) < 0) continue;
+                        ArchiveEvent e;
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(line);
+                            var root = doc.RootElement;
+                            if (root.GetProperty("eid").GetInt32() != eid) continue;
+                            var data = new Dictionary<string, string>();
+                            foreach (var p in root.GetProperty("data").EnumerateObject())
+                                data[p.Name] = p.Value.GetString() ?? "";
+                            e = new ArchiveEvent
+                            {
+                                TsUtc = DateTime.Parse(root.GetProperty("ts").GetString(),
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.AssumeUniversal).ToUniversalTime(),
+                                Eid = eid,
+                                RecordId = root.GetProperty("rid").GetInt64(),
+                                Data = data,
+                            };
+                        }
+                        catch { continue; }
+
+                        string key = keyOf(e);
+                        if (key == null || !wanted.Remove(key)) continue; // already found, or not requested
+                        if (accept != null && !accept(e)) { wanted.Add(key); continue; }
+                        found[key] = e;
+                    }
+                }
+            }
+            catch { /* unreadable archive — partial result, never a throw */ }
+            return found;
+        }
+
         private static List<ArchiveEvent> SearchCore(int? eid, string contains, DateTime? sinceUtc, int max,
             Func<Dictionary<string, string>, bool> dataFilter)
         {

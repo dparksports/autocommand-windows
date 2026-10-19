@@ -16,7 +16,7 @@
         <!-- Main Content. The sidebar is grouped: WATCH (feeds that show what
              the machine is doing), CONTAIN (blocking & defenses), SYSTEM
              (everything configurational). Group headers are non-selectable
-             TabItems; entries are single-line so all 12 fit without
+             TabItems; entries are single-line so all 13 fit without
              scrolling. SelectedIndex=1 skips the WATCH header explicitly. -->
         <TabControl x:Name="MainTabControl" Grid.Row="0" TabStripPlacement="Left" SelectedIndex="1">
 
@@ -81,6 +81,15 @@
                     </StackPanel>
                 </TabItem.Header>
                 <views:FirewallSettingsView x:Name="FirewallTab"/>
+            </TabItem>
+            <TabItem x:Name="BlocksNavItem">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="⛔" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Blocks" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:BlocksView x:Name="BlocksTab"/>
             </TabItem>
             <TabItem x:Name="BlackHoleNavItem">
                 <TabItem.Header>

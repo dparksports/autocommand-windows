@@ -261,6 +261,16 @@ namespace AutoCommand.Models
         /// <summary>Releases a failed resolve attempt so the next tick can retry.</summary>
         public void AbandonIdentity() => _identityPending = false;
 
+        /// <summary>Raw SCM-resident service names csv ("WpnService") — the
+        /// block record's identity source; empty before resolution.</summary>
+        public string HostedServicesCsv => _hostedServices ?? "";
+
+        /// <summary>-k service group, when the command line was readable.</summary>
+        public string SvchostGroup => _svchostGroup;
+
+        /// <summary>-s self-declared service, when present.</summary>
+        public string DeclaredService => _declaredService;
+
         /// <summary>Stamps the resolved svchost identity (SCM services + -k/-s tokens).</summary>
         public void SetSvchostIdentity(string hostedServicesCsv, string servicesDetail,
                                        string group, string declaredService,
