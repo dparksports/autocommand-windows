@@ -768,10 +768,24 @@ namespace AutoCommand.Views
                 return;
             }
 
-            string path = GetProcessPath(item.ProcessId) ?? item.ImagePath;
+            // A process that "ran away" (already exited) is still blockable:
+            // the firewall rule matches the exe path and arms for the next
+            // run. The only real problems are recovering that path and never
+            // mistaking a recycled PID's new tenant for the suspect.
+            var target = await ResolveBlockTargetAsync(item);
+            string path = target.Path;
             if (string.IsNullOrEmpty(path))
             {
-                MessageBox.Show("Could not determine process path (access denied or process exited).", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(
+                    $"'{item.ProcessName}' (PID {item.ProcessId}) already exited, and its executable path could not be recovered:\n" +
+                    "the row carries no Sysmon image path and the 30-day archive holds no create-event for this PID.\n\n" +
+                    "Firewall rules match a full path, so there is nothing to arm the block on.\n" +
+                    (string.IsNullOrEmpty(item.RemoteIp)
+                        ? ""
+                        : "You can still act on the infrastructure it used: right-click the row →\n" +
+                          $"'⛔ Block Remote IP in Firewall' for {item.RemoteIp}.\n") +
+                    "'🔎 Trace: how was this PID spawned?' shows everything recorded about the exited process.",
+                    "Process already exited — cannot block", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -801,29 +815,59 @@ namespace AutoCommand.Views
                 ConfirmPrefs.IsSuppressed(ConfirmPrefs.ConfirmProcess) &&
                 (!coreApplies || ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnWindowsCore));
 
+            // The ran-away note is information, not a warning class: it rides
+            // whichever surface the user sees (the dialog when a prompt is
+            // due, otherwise the success toast) rather than adding a fifth
+            // suppressible prompt.
+            string exitedNote = target.SubjectExited
+                ? "⚠ This process has already exited — the block is preventive:\n" +
+                  "the rule takes effect on the exe's NEXT run. A copy of the exe at a\n" +
+                  "different path is NOT covered." +
+                  (target.ReuseNote != null ? $"\n⚠ {target.ReuseNote}." : "") +
+                  (target.Source == BlockPathSource.Archive
+                      ? "\nPath recovered from the Sysmon archive (create-event for this PID)."
+                      : "") + "\n\n"
+                : "";
+
             if (!confirmSuppressed)
             {
                 string shownWarning = coreApplies && !ConfirmPrefs.IsSuppressed(ConfirmPrefs.WarnWindowsCore) ? warning : "";
-                string detail = $"{path}\n\n(1 outbound rule)\n" +
+                string detail = exitedNote + $"{path}\n\n(1 outbound rule)\n" +
                                 "Undo anytime: the Undo button on the toast, right-click the row again,\nor 'Blocked' → Manage all.";
                 string key = shownWarning.Length > 0 ? ConfirmPrefs.WarnWindowsCore : ConfirmPrefs.ConfirmProcess;
                 string label = shownWarning.Length > 0
                     ? "Don't warn me about blocking Windows service hosts / components — I know what I'm doing"
                     : "Don't ask again before blocking processes";
-                if (!ConfirmBlockWithDialog("Block all outbound network traffic for this process?", shownWarning, detail, key, label))
+                if (!ConfirmBlockWithDialog(
+                        target.SubjectExited
+                            ? "Process already exited — block its executable for next time?"
+                            : "Block all outbound network traffic for this process?",
+                        shownWarning, detail, key, label))
                     return;
             }
 
             try
             {
-                string note = BuildProvenance(item, $"app: {path}", confirmSuppressed);
+                // Ran-away blocks say so in the rule description — auditable
+                // in wf.msc that the rule was armed on an exited process and
+                // where the path was recovered from.
+                string tags = null;
+                if (target.SubjectExited)
+                {
+                    if (target.ReuseNote != null) tags = "exited · pid-reused";
+                    else if (target.Source == BlockPathSource.Archive) tags = "exited · path-from-archive";
+                    else tags = "exited";
+                }
+                string note = BuildProvenance(item, $"app: {path}", confirmSuppressed, tags);
                 var (created, updated) = await FirewallService.Instance.AddAppBlockAsync(path, note);
                 RecordBlockedEntry("proc", path, item.ProcessName);
                 _ = RefreshBlockStateFromFirewallAsync();
-                ShowToast(created > 0
-                        ? $"⛔ Blocked application (1 outbound rule):\n{path}"
-                        : $"Block for {System.IO.Path.GetFileName(path)} already existed — provenance refreshed.",
-                    "proc", path);
+                string toast = created > 0
+                    ? $"⛔ Blocked application (1 outbound rule):\n{path}"
+                    : $"Block for {System.IO.Path.GetFileName(path)} already existed — provenance refreshed.";
+                if (target.SubjectExited)
+                    toast += "\nThe process had already exited — the rule arms its next run.";
+                ShowToast(toast, "proc", path);
             }
             catch (Exception ex)
             {
@@ -849,7 +893,8 @@ namespace AutoCommand.Views
         }
 
         /// <summary>Full provenance embedded into the firewall rule Description.</summary>
-        private static string BuildProvenance(SvchostMonitorItem item, string what, bool confirmSuppressed = false)
+        private static string BuildProvenance(SvchostMonitorItem item, string what, bool confirmSuppressed = false,
+                                              string tags = null)
         {
             string host = "";
             try { host = item.HostnameDisplay is string h && h.Contains("…") == false && h != "resolving…" ? $" host {h}" : ""; } catch { }
@@ -859,7 +904,9 @@ namespace AutoCommand.Views
             // Blocks made under a suppressed prompt say so — auditable later
             // in wf.msc that the standard confirmation was skipped
             return $"[blocked {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC] {item.ProcessName}{svc} PID {item.ProcessId} {what}{host} · " +
-                   $"rx {item.RxBytesDisplay} tx {item.TxBytesDisplay}{(confirmSuppressed ? " · confirm-suppressed" : "")} · AutoCommand Process Monitor";
+                   $"rx {item.RxBytesDisplay} tx {item.TxBytesDisplay}" +
+                   $"{(string.IsNullOrEmpty(tags) ? "" : $" · {tags}")}" +
+                   $"{(confirmSuppressed ? " · confirm-suppressed" : "")} · AutoCommand Process Monitor";
         }
 
         private void BlockedListBtn_Click(object sender, RoutedEventArgs e)
@@ -1049,6 +1096,117 @@ namespace AutoCommand.Views
             }
             catch { }
             return null;
+        }
+
+        // -----------------------------------------------------------------------
+        // Block-target resolution — "the suspect ran away" support
+        // -----------------------------------------------------------------------
+
+        private enum BlockPathSource { Live, Row, Archive }
+
+        /// <summary>What BlockProcess_Click will arm the firewall rule on.</summary>
+        private sealed class BlockTarget
+        {
+            /// <summary>Full exe path; null when unrecoverable (nothing to arm a rule on).</summary>
+            public string Path;
+            /// <summary>Where the path came from: live process, the row's Sysmon capture, or the archive.</summary>
+            public BlockPathSource Source;
+            /// <summary>True when the row's process is known dead (sticky exit flag, or a recycled PID proved it).</summary>
+            public bool SubjectExited;
+            /// <summary>Non-null when PID reuse was detected (the live tenant contradicts the row).</summary>
+            public string ReuseNote;
+        }
+
+        /// <summary>
+        /// Resolves the executable to block for a row, exited or not. Order:
+        /// corroborated live lookup → the row's Sysmon image path → the
+        /// 30-day archive's create-event. The live lookup is skipped
+        /// entirely for exited rows and name-checked otherwise, so a
+        /// recycled PID's new tenant can never end up blocked.
+        /// </summary>
+        private async Task<BlockTarget> ResolveBlockTargetAsync(SvchostMonitorItem item)
+        {
+            var t = new BlockTarget();
+
+            if (item.HasExited)
+            {
+                t.SubjectExited = true;
+            }
+            else
+            {
+                string live = GetProcessPath(item.ProcessId);
+                if (!string.IsNullOrEmpty(live))
+                {
+                    // Name cross-check — the kill flow's reuse guard, applied
+                    // to blocking: the row can be up to one refresh tick
+                    // (10 s) behind reality.
+                    string liveName = System.IO.Path.GetFileName(live);
+                    if (string.IsNullOrEmpty(item.ProcessName) ||
+                        liveName.Equals(item.ProcessName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        t.Path = live;
+                        t.Source = BlockPathSource.Live;
+                        return t;
+                    }
+                    t.SubjectExited = true;
+                    t.ReuseNote = $"PID {item.ProcessId} now runs '{liveName}', not '{item.ProcessName}' — " +
+                                  "the row's process exited and Windows recycled the number";
+                }
+                else if (string.IsNullOrEmpty(item.ImagePath))
+                {
+                    // Live lookup empty and no row path: the process most
+                    // likely died between refresh ticks (HasExited lags) —
+                    // let the archive decide before declaring it lost.
+                    t.SubjectExited = true;
+                }
+            }
+
+            // The row's identity survives exit — Sysmon captured the image
+            // path at row creation exactly so dead rows stay blockable.
+            if (!string.IsNullOrEmpty(item.ImagePath))
+            {
+                t.Path = item.ImagePath;
+                t.Source = BlockPathSource.Row;
+                return t;
+            }
+
+            // Last resort: the archive. A dead process's create-event IS its
+            // identity — the same recovery the PID Inquiry performs.
+            var records = await Task.Run(() =>
+                SysmonArchiveService.SearchCreateEvents(item.ProcessId, 12));
+            var best = PickBestCreateRecord(records, item);
+            if (best != null && best.Data.TryGetValue("Image", out string image) &&
+                !string.IsNullOrEmpty(image))
+            {
+                t.Path = image;
+                t.Source = BlockPathSource.Archive;
+            }
+            return t;
+        }
+
+        /// <summary>
+        /// Picks the create-record that belongs to the row's process when the
+        /// archive holds several for the same (recycled) PID. Preference:
+        /// start-time window ±5 s AND image match &gt; window &gt; image —
+        /// ties keep the newest record (the list comes newest-first).
+        /// </summary>
+        private static SysmonArchiveService.ArchiveEvent PickBestCreateRecord(
+            List<SysmonArchiveService.ArchiveEvent> records, SvchostMonitorItem item)
+        {
+            if (records == null || records.Count == 0) return null;
+            SysmonArchiveService.ArchiveEvent best = null;
+            int bestScore = -1;
+            foreach (var rec in records)
+            {
+                bool imageMatch = !string.IsNullOrEmpty(item.ProcessName) &&
+                                  rec.Data.TryGetValue("Image", out string img) &&
+                                  System.IO.Path.GetFileName(img).Equals(item.ProcessName, StringComparison.OrdinalIgnoreCase);
+                bool inWindow = item.ProcessStartedUtc.HasValue &&
+                                (rec.TsUtc - item.ProcessStartedUtc.Value).Duration() <= TimeSpan.FromSeconds(5);
+                int score = inWindow && imageMatch ? 3 : inWindow ? 2 : imageMatch ? 1 : 0;
+                if (score > bestScore) { bestScore = score; best = rec; }
+            }
+            return best;
         }
 
         // -----------------------------------------------------------------------
