@@ -21,14 +21,14 @@
         <TabControl x:Name="MainTabControl" Grid.Row="0" TabStripPlacement="Left" SelectedIndex="1">
 
             <!-- ═══ WATCH ═══ -->
-            <TabItem IsEnabled="False" Focusable="False">
+            <TabItem x:Name="WatchHeaderItem" IsEnabled="False" Focusable="False">
                 <TabItem.Header>
-                    <TextBlock Text="WATCH" FontSize="10" FontWeight="Bold"
+                    <TextBlock x:Name="WatchHeaderText" Text="WATCH" FontSize="10" FontWeight="Bold"
                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,0,0,2"
                                ToolTip="Feeds that show what this machine is running and where it connects."/>
                 </TabItem.Header>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="ProcessMonitorNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🔍" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -37,7 +37,7 @@
                 </TabItem.Header>
                 <views:SvchostMonitorView x:Name="SvchostTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="SpawnsNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🧬" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -46,7 +46,7 @@
                 </TabItem.Header>
                 <views:SpawnsView x:Name="SpawnsTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="BitsNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📥" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -55,7 +55,7 @@
                 </TabItem.Header>
                 <views:BitsView x:Name="BitsTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="TrafficNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📊" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -82,7 +82,7 @@
                 </TabItem.Header>
                 <views:FirewallSettingsView x:Name="FirewallTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="BlackHoleNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🚫" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -91,7 +91,7 @@
                 </TabItem.Header>
                 <views:BlackHoleView x:Name="BlackHoleTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="DefenderNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🦠" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -102,9 +102,9 @@
             </TabItem>
 
             <!-- ═══ SYSTEM ═══ -->
-            <TabItem IsEnabled="False" Focusable="False">
+            <TabItem x:Name="SystemHeaderItem" IsEnabled="False" Focusable="False">
                 <TabItem.Header>
-                    <TextBlock Text="SYSTEM" FontSize="10" FontWeight="Bold"
+                    <TextBlock x:Name="SystemHeaderText" Text="SYSTEM" FontSize="10" FontWeight="Bold"
                                Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,10,0,2"
                                ToolTip="AI access, privacy, Windows telemetry, Sysmon health and app settings."/>
                 </TabItem.Header>
@@ -118,7 +118,7 @@
                 </TabItem.Header>
                 <views:BeMyGuestView x:Name="BeMyGuestTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="PrivacyNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🔐" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -127,7 +127,7 @@
                 </TabItem.Header>
                 <views:PrivacyView x:Name="PrivacyTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="OneSettingsNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🔄" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -136,7 +136,7 @@
                 </TabItem.Header>
                 <views:OneSettingsView x:Name="OneSettingsTab"/>
             </TabItem>
-            <TabItem>
+            <TabItem x:Name="SysmonNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="🧭" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>

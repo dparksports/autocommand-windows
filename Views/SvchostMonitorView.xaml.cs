@@ -161,6 +161,12 @@ namespace AutoCommand.Views
                 foreach (var item in _uiCollection)
                     EnrichWithSvchostIdentity(item);
 
+                // Rows whose name never resolved get one archive-backed
+                // reveal attempt (one-shot per row — the day-file scan is
+                // real disk work, and the archive does not grow backwards)
+                foreach (var item in _uiCollection)
+                    EnrichWithRevealedName(item);
+
                 DnsCacheChip.Text = $"DNS cache: {_dnsService.CacheCount} entries";
                 UpdateHighTxChip();
             };
@@ -507,6 +513,12 @@ namespace AutoCommand.Views
                 ? $"🔎 Trace PID {sel.ProcessId} — how was it spawned?"
                 : "🔎 Trace: how was this PID spawned?";
 
+            bool revealable = sel != null && sel.ProcessId > 0;
+            RevealNameMenuItem.IsEnabled = revealable;
+            RevealNameMenuItem.Header = revealable
+                ? $"🏷 Reveal real name of PID {sel.ProcessId} (Sysmon record)"
+                : "🏷 Reveal real process name (Sysmon record)";
+
             IgnoreRowMenuItem.Header = sel != null && !string.IsNullOrEmpty(sel.ProcessName)
                 ? $"🚫 Ignore process '{sel.ProcessName}'"
                 : "🚫 Ignore process (no row selected)";
@@ -667,7 +679,83 @@ namespace AutoCommand.Views
             {
                 Owner = Window.GetWindow(this)
             };
+            // Trace→row loop: whatever the inquiry establishes about
+            // identity flows back onto the row (RevealFromReport below) —
+            // until now that finding died with the window.
+            win.ReportCollected += report => Dispatcher.Invoke(() => RevealFromReport(item, report));
             win.Show();
+        }
+
+        /// <summary>
+        /// Writes a PID Inquiry's resolved identity back onto its row.
+        /// Skipped when the report describes a different tenant of the PID
+        /// than the row anchors (start times disagree by more than the
+        /// 5-second capture tolerance) — then the finding belongs to some
+        /// other process, not this row.
+        /// </summary>
+        private void RevealFromReport(SvchostMonitorItem item, ProvenanceReport report)
+        {
+            if (item == null || report == null || string.IsNullOrEmpty(report.ExePath)) return;
+            if (item.ProcessStartedUtc.HasValue && report.Created.HasValue &&
+                (report.Created.Value.ToUniversalTime() - item.ProcessStartedUtc.Value).Duration() > TimeSpan.FromSeconds(5))
+                return;
+            string parent = report.Chain.Count > 1
+                ? (report.Chain[1].ExePath ?? report.Chain[1].Name)
+                : null;
+            item.RevealIdentity(report.ExePath, report.ExePath, parent);
+        }
+
+        /// <summary>
+        /// Context-menu reveal: recovers the row's true identity from the
+        /// Sysmon archive — the same anchored recovery the PID Inquiry
+        /// performs — and corrects the row in place. For rows named by a
+        /// recycled PID, never named at all, or just to learn the parent.
+        /// </summary>
+        private async void RevealNameMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (SvchostGrid.SelectedItem is not SvchostMonitorItem item || item.ProcessId <= 0) return;
+
+            var records = await Task.Run(() =>
+                SysmonArchiveService.SearchCreateEvents(item.ProcessId, 12));
+            var rec = PickBestCreateRecord(records, item);
+            if (rec == null || !rec.Data.TryGetValue("Image", out string image) || string.IsNullOrEmpty(image))
+            {
+                ShowToast($"🏷 No Sysmon create-event found for PID {item.ProcessId} — nothing to reveal.\n" +
+                          "The live-log attempt may still know more: '🔎 Trace: how was this PID spawned?'.");
+                return;
+            }
+
+            rec.Data.TryGetValue("ParentImage", out string parent);
+            string before = item.ProcessName;
+            item.RevealIdentity(image, image, parent);
+
+            string toast = string.Equals(before, item.ProcessName, StringComparison.OrdinalIgnoreCase)
+                ? $"🏷 Confirmed '{item.ProcessName}' is the real name (Sysmon record)."
+                : $"🏷 Real name revealed: '{item.ProcessName}'" +
+                  (string.IsNullOrEmpty(before) ? "." : $" — the row previously showed '{before}'.");
+            if (!string.IsNullOrEmpty(parent))
+                toast += $"\nSpawned by {System.IO.Path.GetFileName(parent)}.";
+            ShowToast(toast);
+        }
+
+        /// <summary>
+        /// One archive-backed identity attempt for rows whose name never
+        /// resolved (process gone before any lookup, event without an
+        /// image). One-shot per row via TryBeginNameProbe: the day-file
+        /// scan is real disk work, and the archive does not grow
+        /// backwards — a miss will stay a miss.
+        /// </summary>
+        private async void EnrichWithRevealedName(SvchostMonitorItem item)
+        {
+            if (!item.NeedsNameReveal || !item.TryBeginNameProbe()) return;
+
+            var records = await Task.Run(() =>
+                SysmonArchiveService.SearchCreateEvents(item.ProcessId, 12));
+            var rec = PickBestCreateRecord(records, item);
+            if (rec == null) return;
+            if (!rec.Data.TryGetValue("Image", out string image) || string.IsNullOrEmpty(image)) return;
+            rec.Data.TryGetValue("ParentImage", out string parent);
+            item.RevealIdentity(image, image, parent);
         }
 
         // -----------------------------------------------------------------------

@@ -58,6 +58,9 @@
                 </WrapPanel>
                 <TextBlock x:Name="IdentImage" Foreground="{DynamicResource TextSecondaryBrush}" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap"/>
                 <TextBlock x:Name="IdentCmd" Foreground="{DynamicResource TextSecondaryBrush}" FontFamily="Consolas" FontSize="11" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                <!-- "What is this process?" — plain-English gloss for
+                     helper names that mean nothing on their own -->
+                <TextBlock x:Name="IdentGloss" Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
             </StackPanel>
         </Border>
 

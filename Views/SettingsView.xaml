@@ -142,6 +142,29 @@
                     </Grid>
                 </Border>
 
+                <!-- Advanced investigation -->
+                <Border Style="{StaticResource CardPanel}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="Advanced investigation" Style="{StaticResource SectionHeader}"/>
+
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,8">
+                            <CheckBox x:Name="AdvancedTabsCheck"
+                                      Content="Show advanced investigation tabs"
+                                      Checked="AdvancedTabsCheck_Checked"
+                                      Unchecked="AdvancedTabsCheck_Unchecked"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="2" Text="Off by default: the sidebar stays a plain watch-and-block tool. When on, eight deep-dive tabs appear — Spawns, BITS Transfers and Traffic Patterns (WATCH); Black Hole and Windows Defender (CONTAIN); Data &amp; Privacy, OneSettings and Sysmon Audit (SYSTEM). Applies immediately and is remembered for next launch."
+                                   Foreground="{DynamicResource TextSecondaryBrush}" FontSize="11" TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+
                 <!-- Application Information -->
                 <Border Style="{StaticResource CardPanel}">
                     <Grid>

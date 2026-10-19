@@ -98,6 +98,75 @@ namespace AutoCommand.Models
 
         private bool _hasExited;
 
+        private string _parentImage;
+        private string _nameRevealedFrom;
+        private bool _nameProbeDone;
+
+        /// <summary>
+        /// Image of the process that spawned this row's process (from the
+        /// Sysmon create-record), when known. The "spawned by git.exe"
+        /// context is what makes unfamiliar helper names readable —
+        /// "git-remote-https.exe" alone tells a user nothing.
+        /// </summary>
+        public string ParentImage
+        {
+            get => _parentImage;
+            set { _parentImage = value; OnPropertyChanged(nameof(ProcessToolTip)); OnPropertyChanged(nameof(HasToolTip)); }
+        }
+
+        /// <summary>
+        /// True for rows whose name never resolved — candidates for the
+        /// archive-backed reveal pass (one attempt per row; the day-file
+        /// scan is real disk work and the archive does not grow backwards).
+        /// </summary>
+        public bool NeedsNameReveal => string.IsNullOrEmpty(ProcessName) && !_nameProbeDone;
+
+        /// <summary>Claims the row for the one-shot reveal pass; false when already attempted.</summary>
+        public bool TryBeginNameProbe()
+        {
+            if (_nameProbeDone) return false;
+            _nameProbeDone = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Overwrites the row's identity with what a Sysmon record (trace
+        /// or archive) proved the process really is — closing the loop for
+        /// rows named by a recycled PID or never named at all. The previous
+        /// display name is kept for the tooltip, so a correction is visible
+        /// instead of silent.
+        /// </summary>
+        public void RevealIdentity(string name, string imagePath, string parentImage)
+        {
+            if (string.IsNullOrEmpty(ImagePath) && !string.IsNullOrEmpty(imagePath))
+                ImagePath = imagePath;
+            if (string.IsNullOrEmpty(_parentImage) && !string.IsNullOrEmpty(parentImage))
+                ParentImage = parentImage;
+            if (!string.IsNullOrEmpty(name) && !SameProcessName(name, ProcessName))
+            {
+                _nameRevealedFrom = ProcessName;
+                ProcessName = System.IO.Path.GetFileName(name);
+            }
+            OnPropertyChanged(nameof(ProcessToolTip));
+            OnPropertyChanged(nameof(HasToolTip));
+        }
+
+        /// <summary>
+        /// Name equality that tolerates the app's two name shapes (Sysmon
+        /// basenames carry ".exe", live ProcessName lookups do not).
+        /// </summary>
+        private static bool SameProcessName(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+                return string.IsNullOrEmpty(a) && string.IsNullOrEmpty(b);
+            string fa = System.IO.Path.GetFileName(a);
+            string fb = System.IO.Path.GetFileName(b);
+            return string.Equals(fa, fb, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(System.IO.Path.GetFileNameWithoutExtension(fa),
+                                 System.IO.Path.GetFileNameWithoutExtension(fb),
+                                 StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// True once the row's process has been observed to have exited. The
         /// row keeps its history (trace/block still work off the Sysmon image
@@ -132,6 +201,12 @@ namespace AutoCommand.Models
 
             TaskName = null;   // the old process's task attribution no longer applies
             TaskUser = null;
+
+            // The old tenant's reveal state does not describe the new one
+            // either — the newcomer gets its own name-probe pass.
+            _nameRevealedFrom = null;
+            _nameProbeDone = false;
+            _parentImage = null;
 
             // The old tenant's service identity does not describe the new one
             // either — enrichment re-resolves it for the new process.
@@ -415,12 +490,15 @@ namespace AutoCommand.Models
 
         /// <summary>True when the Process tooltip has any content to show.</summary>
         public bool HasToolTip =>
-            !string.IsNullOrEmpty(ImagePath) || TaskName != null || (IsSvchost && _identityResolved);
+            !string.IsNullOrEmpty(ImagePath) || TaskName != null || (IsSvchost && _identityResolved) ||
+            !string.IsNullOrEmpty(_parentImage) || _nameRevealedFrom != null;
 
         /// <summary>
-        /// Tooltip for the Process column: image path, scheduled-task
-        /// attribution, and — for resolved svchost rows — the full service
-        /// identity (SCM ground truth, -k group, -s claim, corroboration).
+        /// Tooltip for the Process column: image path, spawn parent and
+        /// plain-English gloss (the "it was Git all along" context),
+        /// scheduled-task attribution, and — for resolved svchost rows —
+        /// the full service identity (SCM ground truth, -k group, -s claim,
+        /// corroboration).
         /// </summary>
         public string ProcessToolTip
         {
@@ -428,6 +506,13 @@ namespace AutoCommand.Models
             {
                 var sb = new StringBuilder();
                 if (!string.IsNullOrEmpty(ImagePath)) sb.AppendLine(ImagePath);
+                if (!string.IsNullOrEmpty(_parentImage) && !SameProcessName(_parentImage, ProcessName))
+                    sb.AppendLine("spawned by " + System.IO.Path.GetFileName(_parentImage));
+                if (AutoCommand.Services.ProcessGlossary.TryDescribe(
+                        !string.IsNullOrEmpty(ImagePath) ? ImagePath : ProcessName, out string gloss))
+                    sb.AppendLine("ℹ " + gloss);
+                if (_nameRevealedFrom != null)
+                    sb.AppendLine($"🏷 real name revealed from the Sysmon record (row previously showed '{_nameRevealedFrom}')");
                 if (TaskName != null)
                 {
                     sb.Append("Task: ").Append(TaskName);

@@ -29,6 +29,10 @@ namespace AutoCommand
             // Live version from the assembly instead of a hardcoded string
             VersionText.Text = $"AutoCommand v{AppVersion}";
 
+            // Advanced investigation tabs are opt-in (Settings) — apply the
+            // saved state before anything can be selected
+            ApplyAdvancedTabs(Services.AdvancedTabsPrefs.Load());
+
             InitializeEnforcer();
 
             // App-level TCP capture + traffic aggregation: one raw socket
@@ -80,6 +84,49 @@ namespace AutoCommand
         /// jobs (ATT&CK T1197 exfiltration vector).
         /// </summary>
         public void RaiseExternalThreat(string type, string details) => OnThreatDetected(type, details);
+
+        // -------------------------------------------------------------------
+        // Advanced investigation tabs — opt-in deep-dive surfaces, hidden
+        // until Settings → Advanced investigation turns them on
+        // -------------------------------------------------------------------
+
+        /// <summary>True when the tab is one of the eight opt-in tabs.</summary>
+        private bool IsAdvancedTab(System.Windows.Controls.TabItem t) =>
+            t == SpawnsNavItem || t == BitsNavItem || t == TrafficNavItem ||
+            t == BlackHoleNavItem || t == DefenderNavItem ||
+            t == PrivacyNavItem || t == OneSettingsNavItem || t == SysmonNavItem;
+
+        /// <summary>
+        /// Shows or hides the eight advanced-investigation tabs. Also called
+        /// by SettingsView when the toggle flips (applies immediately), and
+        /// keeps the group-header tooltips honest about what is currently
+        /// shown. When the tab being viewed is hidden, selection lands back
+        /// on the Process Monitor — an invisible tab must not stay selected.
+        /// </summary>
+        public void ApplyAdvancedTabs(bool enabled)
+        {
+            var v = enabled ? Visibility.Visible : Visibility.Collapsed;
+            SpawnsNavItem.Visibility = v;
+            BitsNavItem.Visibility = v;
+            TrafficNavItem.Visibility = v;
+            BlackHoleNavItem.Visibility = v;
+            DefenderNavItem.Visibility = v;
+            PrivacyNavItem.Visibility = v;
+            OneSettingsNavItem.Visibility = v;
+            SysmonNavItem.Visibility = v;
+
+            WatchHeaderText.ToolTip = enabled
+                ? "Feeds that show what this machine is running and where it connects."
+                : "Feeds that show what this machine is running and where it connects.\n" +
+                  "Spawns, BITS Transfers and Traffic Patterns are hidden — Settings → Advanced investigation shows them.";
+            SystemHeaderText.ToolTip = enabled
+                ? "AI access, privacy, Windows telemetry, Sysmon health and app settings."
+                : "AI access and app settings.\n" +
+                  "Data & Privacy, OneSettings and Sysmon Audit are hidden — Settings → Advanced investigation shows them.";
+
+            if (!enabled && IsAdvancedTab(MainTabControl.SelectedItem as System.Windows.Controls.TabItem))
+                MainTabControl.SelectedItem = ProcessMonitorNavItem;
+        }
 
         private void OnThreatDetected(string type, string details)
         {

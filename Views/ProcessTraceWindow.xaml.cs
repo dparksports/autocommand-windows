@@ -29,6 +29,14 @@ namespace AutoCommand.Views
         private ProvenanceReport _report;
         private bool _busy;
 
+        /// <summary>
+        /// Raised after each successful collection. The Process Monitor
+        /// subscribes so a resolved real name flows back onto the row that
+        /// opened the inquiry (trace→row loop) instead of dying with the
+        /// window.
+        /// </summary>
+        public event Action<ProvenanceReport> ReportCollected;
+
         public ProcessTraceWindow(int pid, string knownName, string knownImagePath, TaskLaunchInfo taskHint,
                                   DateTime? hintSeenUtc = null, DateTime? knownCreatedUtc = null)
         {
@@ -55,6 +63,7 @@ namespace AutoCommand.Views
                         _hintSeenUtc, _knownCreatedUtc));
                 _report = report;
                 Render(report);
+                ReportCollected?.Invoke(report);
                 StatusText.Text = $"Collected in {report.Elapsed.TotalSeconds:F1}s · {DateTime.Now:HH:mm:ss} · " +
                                   "collection is read-only";
             }
@@ -98,6 +107,13 @@ namespace AutoCommand.Views
                 IsSvchostReport(r)
                     ? "— hidden (standard users cannot read SYSTEM svchost lines; rerun elevated to corroborate -k/-s)"
                     : null);
+
+            // Plain-English gloss for names that mean nothing on their own
+            // ("git-remote-https.exe") — the chain below shows the raw
+            // parentage; this line translates it
+            IdentGloss.Text = ProcessGlossary.TryDescribe(r.ExePath ?? r.Name, out string gloss)
+                ? "ℹ " + gloss
+                : null;
 
             var rows = new List<ChainRowVm>();
             for (int i = 0; i < r.Chain.Count; i++)

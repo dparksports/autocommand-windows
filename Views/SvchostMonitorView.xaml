@@ -142,6 +142,7 @@
             <DataGrid.ContextMenu>
                 <ContextMenu Opened="RowMenu_Opened">
                     <MenuItem x:Name="TracePidMenuItem" Header="🔎 Trace: how was this PID spawned?" Click="TracePidMenuItem_Click"/>
+                    <MenuItem x:Name="RevealNameMenuItem" Header="🏷 Reveal real process name (Sysmon record)" Click="RevealNameMenuItem_Click"/>
                     <Separator/>
                     <MenuItem x:Name="IgnoreRowMenuItem" Header="🚫 Ignore this process" Click="IgnoreRowMenuItem_Click"/>
                     <Separator/>

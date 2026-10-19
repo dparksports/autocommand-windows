@@ -329,12 +329,13 @@ namespace AutoCommand.Services
                 
                 if (FilterKnownCloudIps && IsKnownCloudIp(destIp)) return;
 
-                // Resolve process name from PID; short-lived processes often exit
-                // before this lookup runs, so fall back to the image Sysmon logged
+                // The event's own Image is the ground truth — it names the
+                // exact process that opened this connection. A live PID
+                // lookup can only degrade it: an exited PID returns nothing,
+                // a recycled one returns the WRONG tenant's name. Live
+                // lookup runs only when Sysmon itself gave no image.
                 int pid = int.TryParse(processId, out int p) ? p : 0;
-                string processName = ResolveProcessName(pid);
-                if (string.IsNullOrEmpty(processName) && !string.IsNullOrEmpty(image))
-                    processName = Path.GetFileName(image);
+                string processName = string.IsNullOrEmpty(image) ? ResolveProcessName(pid) : Path.GetFileName(image);
 
                 if (_trackedIps.TryGetValue(destIp, out var existing))
                 {
