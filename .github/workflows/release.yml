@@ -1,0 +1,109 @@
+# release.yml - build and attach the Windows release zip on GitHub's runners.
+#
+# Why CI: the 82 MB self-contained zip only ever moves inside GitHub's
+# datacenters. The contributor's uplink pushes source (kilobytes); the
+# runner does publish -> verify -> zip -> checksums -> attach. Same
+# contract as release.ps1 (which stays the local-build path):
+#   - <Version> in AutoCommand.csproj is the single source of truth
+#   - the tag must equal v<Version>
+#   - the published exe must report that version (pipeline guard)
+#   - assets: AutoCommand-v<ver>-win-x64.zip, unblock-autocommand.ps1,
+#     SHA256SUMS.txt (computed for the CI-built zip, uploaded --clobber
+#     so the sums always match the zip they shipped with)
+# No secrets needed: GITHUB_TOKEN with contents:write attaches to
+# releases in this repo. Public repo -> free windows-latest minutes.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build and attach to (e.g. v2026.10.18). Must match the csproj <Version>.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-attach:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version and tag (single source of truth)
+        id: ver
+        shell: pwsh
+        run: |
+          $csproj = Get-Content AutoCommand.csproj -Raw
+          if ($csproj -notmatch '(?m)^\s*<Version>([\d.]+)</Version>\s*$') {
+            throw 'cannot read <Version> from AutoCommand.csproj'
+          }
+          $ver = $Matches[1]
+          $tag = '${{ inputs.tag }}'
+          if (-not $tag) { $tag = '${{ github.ref_name }}' }
+          if ($tag -ne "v$ver") {
+            throw "refusing to build: tag '$tag' does not match csproj version 'v$ver'"
+          }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "building v$ver for release $tag"
+
+      - name: Publish app (self-contained win-x64)
+        run: dotnet publish AutoCommand.csproj -c Release -r win-x64 --self-contained true -o publish/app
+
+      - name: Publish AgentProxy (self-contained single-file tool)
+        run: dotnet publish AgentProxy\AutoCommand.AgentProxy.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:PublishTrimmed=true -o publish/app/tools/AgentProxy
+
+      - name: Verify binaries carry the csproj version
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.version }}'
+          $exe   = (Get-Item publish/app/AutoCommand.exe).VersionInfo.ProductVersion
+          $proxy = (Get-Item publish/app/tools/AgentProxy/AutoCommand.AgentProxy.exe).VersionInfo.ProductVersion
+          if ($exe -ne $ver -or $proxy -ne $ver) {
+            throw "version pipeline broken: app='$exe' proxy='$proxy' expected='$ver'"
+          }
+          Write-Host "verified ProductVersion: app=$exe proxy=$proxy"
+
+      - name: Zip + SHA256SUMS
+        shell: pwsh
+        run: |
+          $ver = '${{ steps.ver.outputs.version }}'
+          $zip = "publish/AutoCommand-v$ver-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path publish/app/* -DestinationPath $zip
+          Copy-Item unblock-autocommand.ps1 publish/unblock-autocommand.ps1 -Force
+          $h1 = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $h2 = (Get-FileHash publish/unblock-autocommand.ps1 -Algorithm SHA256).Hash.ToLower()
+          $sums = @(
+            "{0}  {1}" -f $h1, (Split-Path $zip -Leaf)
+            "{0}  unblock-autocommand.ps1" -f $h2
+          )
+          Set-Content publish/SHA256SUMS.txt $sums
+          Get-Content publish/SHA256SUMS.txt
+
+      - name: Attach assets to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.ver.outputs.tag }}'
+          $ver = '${{ steps.ver.outputs.version }}'
+          gh release view $tag --repo $Env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $Env:GITHUB_REPOSITORY --title $tag --notes-file "release_notes_v$ver.md"
+          }
+          gh release upload $tag `
+            "publish/AutoCommand-v$ver-win-x64.zip" `
+            publish/unblock-autocommand.ps1 `
+            publish/SHA256SUMS.txt `
+            --clobber --repo $Env:GITHUB_REPOSITORY
