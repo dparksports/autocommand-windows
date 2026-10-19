@@ -85,8 +85,9 @@ namespace AutoCommand.Services
                 }
                 catch { /* unreadable store — start empty, rules are the truth */ }
 
-                // One-time import of the legacy monitor file(s): the CWD-relative
-                // blocked.txt this app (or a sibling myfirewall install) wrote.
+                // One-time import of legacy monitor files: our own CWD-relative
+                // blocked.txt plus any prior install's copy discovered in its
+                // versioned folder (read-only — their file is left in place).
                 foreach (string legacy in CandidateLegacyPaths())
                 {
                     try
@@ -94,7 +95,7 @@ namespace AutoCommand.Services
                         if (!File.Exists(legacy)) continue;
                         if (ImportLegacy(legacy))
                         {
-                            RenameImported(legacy);
+                            if (IsOwnLegacyPath(legacy)) RenameImported(legacy);
                             importedAny = true;
                         }
                     }
@@ -152,23 +153,69 @@ namespace AutoCommand.Services
             catch { return null; }
         }
 
-        /// <summary>Legacy CWD-relative candidates, newest convention first.</summary>
-        private static IEnumerable<string> CandidateLegacyPaths()
+        /// <summary>
+        /// Legacy blocked.txt candidates. The CWD-relative files are ours and
+        /// get renamed after import; the discovered ones belong to OTHER
+        /// installs (the app ships as versioned folders — every update
+        /// extracts to Downloads\AutoCommand-v<ver>\ leaving the previous
+        /// release's blocked.txt behind), so they are read but never touched.
+        /// Own-dir candidates first, then discovered, newest install first.
+        /// </summary>
+        internal static IEnumerable<string> CandidateLegacyPaths()
         {
-            yield return Path.Combine(Environment.CurrentDirectory, "blocked.txt");
-            yield return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "blocked.txt");
+            string cwd = Path.Combine(Environment.CurrentDirectory, "blocked.txt");
+            string baseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "blocked.txt");
+            yield return cwd;
+            if (!string.Equals(baseDir, cwd, StringComparison.OrdinalIgnoreCase))
+                yield return baseDir;
+
+            // prior versioned install folders (Downloads / Desktop) and any
+            // app-local copy — sorted newest folder name first
+            var roots = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                DataDirectory,
+            };
+            foreach (string root in roots.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                List<string> hits = null;
+                try
+                {
+                    hits = Directory.GetDirectories(root, "AutoCommand-v*")
+                        .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
+                        .Select(d => Path.Combine(d, "blocked.txt"))
+                        .Where(File.Exists)
+                        .ToList();
+                    var direct = Path.Combine(root, "blocked.txt");
+                    if (File.Exists(direct)) hits.Add(direct);
+                }
+                catch { /* unreadable root — skip it */ }
+                if (hits == null) continue;
+                foreach (string h in hits) yield return h;
+            }
+        }
+
+        internal static bool IsOwnLegacyPath(string path)
+        {
+            string cwd = Environment.CurrentDirectory;
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            return path.StartsWith(cwd, StringComparison.OrdinalIgnoreCase) ||
+                   path.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
         /// Imports v2 (kind|key|process|ts, 4 fields) and the older myfirewall
         /// rows (ip|process|ts or process|"Default Policy"|ts, 3 fields).
-        /// Returns true when at least one record was imported.
+        /// Records synthesized by the firewall-reconcile pass (origin
+        /// "reconcile") are UPGRADED by a matching legacy row — the legacy
+        /// row carries the richer data (precise timestamps, process labels).
+        /// Returns true when at least one record was added or upgraded.
         /// </summary>
         private static bool ImportLegacy(string path)
         {
             int imported = 0;
-            var importedKeys = new HashSet<string>(_records.Select(r => r.Kind + ":" + r.Key),
-                StringComparer.OrdinalIgnoreCase);
+            var known = _records.ToDictionary(r => r.Kind + ":" + r.Key, r => r, StringComparer.OrdinalIgnoreCase);
             var pending = new List<BlockRecord>();
 
             foreach (string line in File.ReadAllLines(path))
@@ -185,8 +232,19 @@ namespace AutoCommand.Services
                 if (r == null) { Unrecognized.Add(line); continue; }
 
                 string dedupe = r.Kind + ":" + r.Key;
-                if (importedKeys.Contains(dedupe)) continue; // v3 store already knows it
-                importedKeys.Add(dedupe);
+                if (known.TryGetValue(dedupe, out var existing))
+                {
+                    // reconcile-synthesized rows are lower fidelity — upgrade
+                    if (existing.Origin == "reconcile")
+                    {
+                        r.Status = existing.Status;
+                        _records[_records.IndexOf(existing)] = r;
+                        known[dedupe] = r;
+                        imported++;
+                    }
+                    continue;
+                }
+                known[dedupe] = r;
                 pending.Add(r);
                 imported++;
             }
@@ -254,6 +312,42 @@ namespace AutoCommand.Services
                 File.Delete(legacy);
             }
             catch { /* keep the original rather than risk a double-import failing */ }
+        }
+
+        /// <summary>
+        /// Pulls the service identity out of a block rule's provenance
+        /// description — BuildProvenance writes
+        /// "[blocked ts] svchost.exe [netprofm] PID 1216 → …", so the
+        /// firewall rules themselves are a durable identity carrier the
+        /// reconcile path can read without the archive. The bracketed label
+        /// is the monitor's resolved identity ("WpnService", "A+B",
+        /// "A+2 more"); the primary service is the first token.
+        /// </summary>
+        public static bool TryParseServiceFromDescription(string desc, out string serviceKey, out string displayName)
+        {
+            serviceKey = displayName = null;
+            if (string.IsNullOrEmpty(desc)) return false;
+            int close = desc.IndexOf(']');
+            if (close < 0 || !desc.StartsWith("[blocked ", StringComparison.Ordinal)) return false;
+
+            string rest = desc.Substring(close + 1).TrimStart();
+            int bracket = rest.IndexOf('[');
+            if (bracket <= 0) return false;
+            int end = rest.IndexOf(']', bracket + 1);
+            if (end <= bracket) return false;
+
+            string proc = rest.Substring(0, bracket).Trim();
+            if (!proc.StartsWith("svchost", StringComparison.OrdinalIgnoreCase)) return false;
+
+            string label = rest.Substring(bracket + 1, end - bracket - 1).Trim();
+            if (label.Length == 0) return false;
+            int plus = label.IndexOf('+');
+            if (plus > 0) label = label.Substring(0, plus).Trim(); // "A+2 more" → primary
+            if (label.Length == 0 || label.Equals("no service", StringComparison.OrdinalIgnoreCase)) return false;
+
+            serviceKey = label.ToLowerInvariant();
+            displayName = ServiceCatalog.TryGet(serviceKey, out var c) ? c.DisplayName : label;
+            return true;
         }
 
         internal static string ClassForPath(string path)

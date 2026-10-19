@@ -120,7 +120,8 @@
                                                     <Grid>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="24"/>
-                                                            <ColumnDefinition Width="220"/>
+                                                            <ColumnDefinition Width="190"/>
+                                                            <ColumnDefinition Width="200"/>
                                                             <ColumnDefinition Width="150"/>
                                                             <ColumnDefinition Width="110"/>
                                                             <ColumnDefinition Width="170"/>
@@ -131,16 +132,19 @@
                                                         <TextBlock Grid.Column="1" Text="{Binding Target}" FontSize="11" FontFamily="Consolas"
                                                                    Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center"
                                                                    ToolTip="{Binding TargetToolTip}" TextTrimming="CharacterEllipsis"/>
-                                                        <TextBlock Grid.Column="2" Text="{Binding ClassDisplay}" FontSize="10"
+                                                        <TextBlock Grid.Column="2" Text="{Binding ServiceDisplay}" FontSize="10"
+                                                                   Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
+                                                                   ToolTip="{Binding ServiceToolTip}" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Grid.Column="3" Text="{Binding ClassDisplay}" FontSize="10"
                                                                    Foreground="{Binding ClassBrush}" VerticalAlignment="Center"
                                                                    ToolTip="{Binding ClassToolTip}"/>
-                                                        <TextBlock Grid.Column="3" Text="{Binding CreatedDisplay}" FontSize="10"
+                                                        <TextBlock Grid.Column="4" Text="{Binding CreatedDisplay}" FontSize="10"
                                                                    Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center"
                                                                    ToolTip="{Binding CreatedToolTip}"/>
-                                                        <TextBlock Grid.Column="4" Text="{Binding LastTraffic}" FontSize="10"
+                                                        <TextBlock Grid.Column="5" Text="{Binding LastTraffic}" FontSize="10"
                                                                    Foreground="{Binding LastTrafficBrush}" VerticalAlignment="Center"
                                                                    ToolTip="{Binding LastTrafficToolTip}"/>
-                                                        <StackPanel Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                        <StackPanel Grid.Column="6" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                                             <Button Content="{Binding RowActionLabel}" Click="RowToggle_Click" Tag="{Binding}"
                                                                     Padding="8,2" FontSize="10" Margin="0,0,6,0"
                                                                    />

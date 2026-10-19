@@ -24,6 +24,34 @@ namespace AutoCommand.Views
         public string Target => Record.IsIp ? Record.Key
             : System.IO.Path.GetFileName(Record.Key);
         public string TargetToolTip => Record.Key;
+
+        /// <summary>The service that made the blocked connection — the row's
+        /// own answer to "which network service did I block?", independent of
+        /// its group header.</summary>
+        public string ServiceDisplay
+        {
+            get
+            {
+                string key = BlocksStore.ServiceGroupKey(Record);
+                if (key == "svchost:unresolved") return "…attributing";
+                return ServiceCatalog.DisplayNameFor(key, Record.SvcDisplayName) switch
+                {
+                    "Unattributed" => "…attributing",
+                    var n => n,
+                };
+            }
+        }
+        public string ServiceToolTip
+        {
+            get
+            {
+                string key = BlocksStore.ServiceGroupKey(Record);
+                if (ServiceCatalog.TryGet(key, out var c)) return c.Description;
+                return key == "svchost:unresolved"
+                    ? "Service identity not yet recovered — the Sysmon/SCM attribution pass fills this in."
+                    : $"Service/exe identity: {key} (recovered via {Record.Attrib})";
+            }
+        }
         public string ClassDisplay => Record.IsIp ? Record.ClassAtBlock : Record.ClassAtBlock;
         public Brush ClassBrush;
         public string ClassToolTip => Record.IsIp
@@ -86,6 +114,10 @@ namespace AutoCommand.Views
         private ServiceSymptom _restoreSymptom;
         private List<BlockRowVm> _restoreMatches = new();
 
+        // One automatic attribution repair per session — nobody should have
+        // to know the button exists to see service names.
+        private bool _autoRepairStarted;
+
         public BlocksView()
         {
             InitializeComponent();
@@ -130,6 +162,22 @@ namespace AutoCommand.Views
                         Origin = "reconcile",
                         Attrib = "none",
                     };
+                    // The rules carry their own provenance — the service the
+                    // monitor resolved at block time is embedded in the
+                    // description, so reconcile recovers identity without
+                    // the archive.
+                    if (BlocksStore.TryParseServiceFromDescription(t.Description, out string sk, out string dn))
+                    {
+                        r.ServiceKey = sk;
+                        r.SvcDisplayName = dn;
+                        r.Attrib = "rule-desc";
+                    }
+                    else if (r.Kind == "proc" && !string.IsNullOrEmpty(r.Key))
+                    {
+                        r.ServiceKey = System.IO.Path.GetFileNameWithoutExtension(r.Key).ToLowerInvariant();
+                        r.SvcDisplayName = ServiceCatalog.DisplayNameFor(r.ServiceKey, null);
+                        r.Attrib = "catalog";
+                    }
                     if (!string.IsNullOrEmpty(r.Key)) BlocksStore.AddOrUpdate(r, "reconcile");
                 }
                 if (records.Count == 0 || BlocksStore.Records.Count != records.Count) records = BlocksStore.Records.ToList();
@@ -202,6 +250,29 @@ namespace AutoCommand.Views
                 StatusText.Text = $"synced {DateTime.Now:HH:mm:ss}" +
                     (BlocksStore.Unrecognized.Count > 0
                         ? $" · {BlocksStore.Unrecognized.Count} unrecognized line(s) preserved in blocks.txt" : "");
+
+                // Auto-repair: nobody should have to know the button exists.
+                // Once per session, when rows are still unattributed, run the
+                // Sysmon/SCM pass in the background and re-render.
+                int unresolved = vms.Count(v => BlocksStore.ServiceGroupKey(v.Record) == "svchost:unresolved");
+                if (unresolved > 0 && !_autoRepairStarted)
+                {
+                    _autoRepairStarted = true;
+                    StatusText.Text = $"attributing {unresolved} block(s) from the Sysmon archive…";
+                    _ = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var progress = new Progress<string>(m =>
+                                Dispatcher.Invoke(() => StatusText.Text = m));
+                            await BlockAttributionService.RepairAllAsync(progress);
+                        }
+                        finally
+                        {
+                            await Dispatcher.InvokeAsync(async () => { _loading = false; await ReloadAsync(); });
+                        }
+                    });
+                }
             }
             catch (Exception ex)
             {
