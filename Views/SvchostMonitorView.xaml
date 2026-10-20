@@ -81,6 +81,13 @@
                 </Border>
                 <StackPanel Grid.Column="5" Orientation="Horizontal">
                     <CheckBox x:Name="HideCloudCheck" Content="Hide Known/Cloud IPs" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                    <!-- One-way transmitter lens, off by default: when on, the
+                         grid shows only rows that have sent packets and never
+                         received a reply. New rows must first sit through the
+                         grace period (30s) with zero Rx, so mid-handshake
+                         conversations don't flash as TX-only. -->
+                    <CheckBox x:Name="TxOnlyCheck" Content="TX-only (no reply)" IsChecked="False" Foreground="{DynamicResource TextPrimaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" Checked="TxOnlyFilter_Changed" Unchecked="TxOnlyFilter_Changed"
+                              ToolTip="Show only rows that have transmitted packets and never received any — the one-way transmitter pattern (blocked outbound, dead-end beacons). Rows qualify after 30s of life with zero Rx; the count appears here while the filter is off. Rx is counted by the raw-socket sniffer, so IPv6 replies can lag."/>
                     <!-- PID inquiry lives in the row context menu and the
                          row double-click (OpenPidTrace) — the bar keeps only
                          the filters and the ignore list. -->

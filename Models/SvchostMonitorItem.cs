@@ -370,13 +370,13 @@ namespace AutoCommand.Models
         public long RxBytes
         {
             get => _rxBytes;
-            set { _rxBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(RxBytesDisplay)); }
+            set { _rxBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(RxBytesDisplay)); OnPropertyChanged(nameof(IsTxOnly)); }
         }
 
         public long TxBytes
         {
             get => _txBytes;
-            set { _txBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(TxBytesDisplay)); OnPropertyChanged(nameof(IsHighTransmitter)); }
+            set { _txBytes = value; OnPropertyChanged(); OnPropertyChanged(nameof(TxBytesDisplay)); OnPropertyChanged(nameof(IsHighTransmitter)); OnPropertyChanged(nameof(IsTxOnly)); }
         }
 
         /// <summary>
@@ -388,6 +388,33 @@ namespace AutoCommand.Models
 
         /// <summary>True while this row's transmit volume is at or above the high-transmitter threshold.</summary>
         public bool IsHighTransmitter => TxBytes >= TxThresholdBytes;
+
+        /// <summary>
+        /// Row creation time (UTC) — the clock the TX-only grace period runs
+        /// on. Deliberately not the process start: counters belong to the
+        /// remote-IP row, which can outlive and re-attribute processes.
+        /// </summary>
+        public DateTime FirstSeenUtc { get; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Grace period a row must age through before it can count as a
+        /// one-way transmitter. Rows are seeded at 0/0 and Rx only arrives
+        /// when a reply packet crosses the sniffer, so every new row is
+        /// briefly "TX, no RX" mid-handshake; the gate keeps those from
+        /// flashing in the TX-only view.
+        /// </summary>
+        public static int TxOnlyGraceSeconds = 30;
+
+        /// <summary>
+        /// True while the row has transmitted but never received anything
+        /// back — the one-way-transmitter pattern (firewall-blocked
+        /// outbound, dead-end beacons). Time-gated by the grace period, so
+        /// it must be re-raised periodically (RefreshLastSeenDisplay), not
+        /// only when a counter moves.
+        /// </summary>
+        public bool IsTxOnly =>
+            TxBytes > 0 && RxBytes == 0 &&
+            (DateTime.UtcNow - FirstSeenUtc).TotalSeconds >= TxOnlyGraceSeconds;
 
         public string RxBytesDisplay => FormatBytes(RxBytes);
         public string TxBytesDisplay => FormatBytes(TxBytes);
@@ -556,13 +583,15 @@ namespace AutoCommand.Models
         public event PropertyChangedEventHandler PropertyChanged;
 
         /// <summary>
-        /// Called by the UI refresh timer to re-evaluate the relative "Xs ago" text
-        /// and the staleness flag without needing to mutate LastSeen itself.
+        /// Called by the UI refresh timer to re-evaluate the relative "Xs ago"
+        /// text, the staleness flag, and the time-gated TX-only flag without
+        /// needing to mutate LastSeen itself.
         /// </summary>
         public void RefreshLastSeenDisplay()
         {
             OnPropertyChanged(nameof(LastSeenDisplay));
             OnPropertyChanged(nameof(IsStale));
+            OnPropertyChanged(nameof(IsTxOnly));
         }
 
         protected void OnPropertyChanged([CallerMemberName] string name = null)

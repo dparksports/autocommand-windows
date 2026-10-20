@@ -27,6 +27,7 @@ How AutoCommand delivers what the [README](../README.md) promises: the technolog
 | Name resolution | Background reverse-DNS service with a persistent JSON cache |
 | Task attribution | taskhostw instance GUID on the command line correlated with Task Scheduler history (the channel is enabled once if off); COM-handler tasks get their ClassId resolved through `HKCR\CLSID\{…}\InprocServer32` to the handler DLL, flagged when unregistered |
 | Live ordering | WPF `ICollectionView` live sorting on the row's `LastSeen` timestamp; stale rows detected off a UI timer |
+| TX-only filter | Off-by-default view lens: `ICollectionView.Filter` + live filtering over a time-gated `IsTxOnly` flag (sent bytes > 0, received = 0, row ≥ 30 s old — the grace keeps mid-handshake rows from flashing, since rows seed at 0/0 and Rx only lands when a reply crosses the sniffer); the checkbox label carries the live count while the lens is off; a view lens only — ingestion, the CSV export and the AI-audit context all read the unfiltered source |
 | Row lifecycle | `LastSeen` seeded from the Sysmon event's UTC time (one-shot connections still get a real timestamp); the UI timer marks rows "— exited" once their PID is gone, and a later Sysmon event re-attributes the row to a new PID on the same remote IP |
 
 ### Sysmon Audit

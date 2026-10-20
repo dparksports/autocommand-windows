@@ -26,6 +26,8 @@ That's the whole tutorial. Looking changes nothing; deleting the folder uninstal
 
 The main screen is a list of rows — one per connection. Every row tells you who's talking, to whom, how much, for how long, and gives you a Block button (with an undo, and a panic button that restores everything). When a row surprises you, *that's* the moment to click it or ask for a second opinion — not before. Most rows, you'll never need to think about.
 
+One question the list can answer for itself: the **TX-only (no reply)** checkbox — off by default — narrows it to programs that have *sent* packets and never heard one word back. That's the shape of a blocked outbound call or a dead-end beacon, and the checkbox shows how many are out there before you switch it on. It's a lens, not a verdict: uncheck it and the full list is exactly where it was, nothing hidden while you weren't looking.
+
 ## Where everything lives
 
 ![Where everything lives](Assets/app_map_infographic.png?v=oss3)
