@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Self-test for the "Why is this site slow?" pipeline: compiles the
+       app's sources directly, so what runs here is byte-identical to what
+       ships in AutoCommand. Excluded from the app build (AutoCommand.csproj
+       Compile Remove, like NetWatchSelfTest).
+
+       Offline sections drive the fingerprint engine with synthetic archive
+       records and the verdict rules with synthetic probe reports. The one
+       LIVE section binds loopback listeners (no admin, no external network):
+       a TLS server that answers handshakes, and a "black hole" that accepts
+       TCP and never replies — the exact failure shape the dual-hello probe
+       exists to detect, proven detectable at the source. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SiteDoctorSelfTest</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Models\TransmissionRecord.cs" />
+    <Compile Include="..\Services\SiteFingerprintService.cs" />
+    <Compile Include="..\Services\SiteProbeService.cs" />
+    <Compile Include="..\Services\SiteVerdictService.cs" />
+  </ItemGroup>
+
+</Project>

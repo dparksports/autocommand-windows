@@ -21,6 +21,7 @@ namespace AutoCommand.Services
         public enum VerdictKind
         {
             Blocked,             // nothing reaches the site from this PC
+            LocalTlsBroken,      // every handshake fails, controls included — the PC's stack
             HandshakeDropping,   // servers accept TCP but drop some TLS hellos
             Steering,            // short-TTL DNS roulette across uneven servers
             FarAway,             // handshakes complete but the path is slow
@@ -61,6 +62,7 @@ namespace AutoCommand.Services
             if (report != null)
             {
                 verdict ??= RuleBlocked(report);
+                verdict ??= RuleLocalTlsBroken(report);
                 verdict ??= RuleHandshakeDropping(report);
                 verdict ??= RuleSteering(report, fingerprint);
                 verdict ??= RuleFarAway(report);
@@ -131,6 +133,32 @@ namespace AutoCommand.Services
             return null;
         }
 
+        private static Verdict RuleLocalTlsBroken(SiteProbeService.SiteProbeReport r)
+        {
+            // TCP reaches the site, every handshake fails — and the CONTROL
+            // sites fail the same way. Same machine, same stack, same
+            // failure everywhere means the local TLS stack, not the site.
+            // (Observed in the wild: OS hardening that leaves schannel
+            // unable to create ephemeral keys — some apps' TLS still works,
+            // which makes it look exactly like "this one site is broken".)
+            if (r.Controls.Count == 0 || r.Controls.Any(c => c.TlsMs.HasValue)) return null;
+
+            var tcpOk = r.Edges.Where(e => e.TcpConnectMs.HasValue).ToList();
+            if (tcpOk.Count == 0 || !tcpOk.All(e => Failed(e.TlsDefaultMs) && Failed(e.TlsPlainMs)))
+                return null;
+
+            return new Verdict
+            {
+                Kind = VerdictKind.LocalTlsBroken,
+                Headline =
+                    "Every secure handshake fails — including to your control sites, whose servers are known-good. " +
+                    "The connection layer on THIS PC is the problem (TLS settings or hardening), not the site.",
+                NextStep =
+                    "Recent OS 'TLS hardening' changes are the usual suspect — if you ran any, undo them and retest. " +
+                    "Sites may still load in some browsers (they carry their own TLS), which makes this look like a one-site fault."
+            };
+        }
+
         private static Verdict RuleHandshakeDropping(SiteProbeService.SiteProbeReport r)
         {
             // The smoking gun: TCP completes, one hello shape is silently
@@ -142,7 +170,7 @@ namespace AutoCommand.Services
             if (splitEdges.Count > 0)
             {
                 bool defaultDropped = splitEdges.Any(e => Failed(e.TlsDefaultMs) && !Failed(e.TlsPlainMs));
-                string shape = defaultDropped ? "the plain handshake" : "the Windows-default handshake";
+                string shape = defaultDropped ? "the Windows-default handshake" : "the plain handshake";
                 return new Verdict
                 {
                     Kind = VerdictKind.HandshakeDropping,
@@ -157,9 +185,13 @@ namespace AutoCommand.Services
                 };
             }
 
-            // Weaker form: every edge dropped BOTH shapes after a good TCP.
+            // Weaker form: edges that dropped BOTH shapes after a good TCP.
+            // Conclusive on its own from 2+ edges; a single edge needs a
+            // healthy control to rule out the local machine.
             var tcpOk = r.Edges.Where(e => e.TcpConnectMs.HasValue).ToList();
-            if (tcpOk.Count >= 2 && tcpOk.All(e => Failed(e.TlsDefaultMs) && Failed(e.TlsPlainMs)))
+            bool controlHealthy = r.Controls.Any(c => c.TlsMs.HasValue);
+            if (tcpOk.Count >= 1 && tcpOk.All(e => Failed(e.TlsDefaultMs) && Failed(e.TlsPlainMs)) &&
+                (tcpOk.Count >= 2 || controlHealthy))
                 return new Verdict
                 {
                     Kind = VerdictKind.HandshakeDropping,

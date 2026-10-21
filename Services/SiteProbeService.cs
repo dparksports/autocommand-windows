@@ -50,7 +50,7 @@ namespace AutoCommand.Services
         public static readonly TimeSpan DnsSampleInterval = TimeSpan.FromSeconds(12);
 
         private static readonly Regex HostnamePattern = new(
-            @"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
+            @"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$",
             RegexOptions.Compiled);
 
         // ── result models (JSON-serializable for the MCP tool) ───────────
@@ -134,7 +134,8 @@ namespace AutoCommand.Services
             IEnumerable<string> extraEdges = null,
             IEnumerable<string> controlHosts = null,
             IProgress<string> progress = null,
-            CancellationToken cancel = default)
+            CancellationToken cancel = default,
+            TimeSpan? dnsSampleInterval = null)
         {
             host = (host ?? "").Trim().TrimEnd('.');
             if (!HostnamePattern.IsMatch(host) && !IPAddress.TryParse(host, out _))
@@ -154,7 +155,7 @@ namespace AutoCommand.Services
             for (int i = 0; i < MaxDnsSamples; i++)
             {
                 cancel.ThrowIfCancellationRequested();
-                if (i > 0) await Task.Delay(DnsSampleInterval, cancel);
+                if (i > 0) await Task.Delay(dnsSampleInterval ?? DnsSampleInterval, cancel);
                 var sample = new DnsSample { AtUtc = DateTime.UtcNow };
                 try
                 {
@@ -199,25 +200,27 @@ namespace AutoCommand.Services
 
         // ── instruments ───────────────────────────────────────────────────
 
-        private async Task<EdgeProbe> ProbeEdgeAsync(
-            string ip, string host, Action<string, string> log, CancellationToken cancel)
+        /// <summary>internal for the offline self-test, which drives it
+        /// against loopback listeners on non-443 ports.</summary>
+        internal async Task<EdgeProbe> ProbeEdgeAsync(
+            string ip, string host, Action<string, string> log, CancellationToken cancel, int port = 443)
         {
-            var probe = new EdgeProbe { Ip = ip };
+            var probe = new EdgeProbe { Ip = ip, Port = port };
             var tcp = new TcpClient();
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var connect = tcp.ConnectAsync(ip, 443, cancel).AsTask();
+                var connect = tcp.ConnectAsync(ip, port, cancel).AsTask();
                 if (await Task.WhenAny(connect, Task.Delay(TcpConnectTimeout, cancel)) != connect)
                     throw new TimeoutException($"no TCP answer in {TcpConnectTimeout.TotalMilliseconds:0}ms");
                 await connect;
                 probe.TcpConnectMs = Math.Round(sw.Elapsed.TotalMilliseconds);
-                log("tcp", $"TCP {ip}:443 connected in {probe.TcpConnectMs:0} ms");
+                log("tcp", $"TCP {ip}:{port} connected in {probe.TcpConnectMs:0} ms");
             }
             catch (Exception ex)
             {
                 probe.TcpError = ex.Message;
-                log("tcp", $"TCP {ip}:443 FAILED — {ex.Message}");
+                log("tcp", $"TCP {ip}:{port} FAILED — {ex.Message}");
                 tcp.Dispose();
                 return probe;
             }
@@ -225,9 +228,9 @@ namespace AutoCommand.Services
             // Two hello shapes, each on its own connection so one cannot
             // poison the other's session state.
             (probe.TlsDefaultMs, probe.TlsDefaultError, probe.TlsDefaultVersion) =
-                await HandshakeAsync(ip, host, plainShape: false, log, cancel);
+                await HandshakeAsync(ip, host, plainShape: false, log, cancel, port);
             (probe.TlsPlainMs, probe.TlsPlainError, probe.TlsPlainVersion) =
-                await HandshakeAsync(ip, host, plainShape: true, log, cancel);
+                await HandshakeAsync(ip, host, plainShape: true, log, cancel, port);
 
             tcp.Dispose();
             return probe;
@@ -238,15 +241,15 @@ namespace AutoCommand.Services
         /// the probe measures transport behavior (does the server answer
         /// this hello shape at all), not identity; no credentials ever flow.
         /// </summary>
-        private async Task<(double? ms, string error, string version)> HandshakeAsync(
-            string ip, string host, bool plainShape, Action<string, string> log, CancellationToken cancel)
+        internal async Task<(double? ms, string error, string version)> HandshakeAsync(
+            string ip, string host, bool plainShape, Action<string, string> log, CancellationToken cancel, int port = 443)
         {
             string shapeName = plainShape ? "plain TLS 1.2 hello" : "Windows default hello";
             var tcp = new TcpClient();
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var connect = tcp.ConnectAsync(ip, 443, cancel).AsTask();
+                var connect = tcp.ConnectAsync(ip, port, cancel).AsTask();
                 if (await Task.WhenAny(connect, Task.Delay(TcpConnectTimeout, cancel)) != connect)
                     throw new TimeoutException("no TCP answer");
                 await connect;
@@ -276,7 +279,7 @@ namespace AutoCommand.Services
             catch (Exception ex)
             {
                 string msg = ex.InnerException?.Message ?? ex.Message;
-                log("tls", $"TLS {shapeName} {ip}:443 FAILED — {msg}");
+                log("tls", $"TLS {shapeName} {ip}:{port} FAILED — {msg}");
                 return (null, msg, null);
             }
             finally

@@ -1,0 +1,317 @@
+// Site doctor self-test — the "Why is this site slow?" pipeline, proven at
+// the source. Offline: fingerprint signals (edge dispersion, 5-second
+// bursts, single-edge churn) over synthetic archive records, and every
+// verdict rule over synthetic probe reports. Live (loopback only, no admin,
+// no external network): a TLS server that answers handshakes and a "black
+// hole" that accepts TCP then never replies — the failure shape observed in
+// the wild, asserted detectable end-to-end by the dual-hello probe.
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading;
+using System.Threading.Tasks;
+using AutoCommand.Models;
+using AutoCommand.Services;
+
+int failures = 0;
+void Check(string name, bool pass, string evidence = "")
+{
+    Console.WriteLine($"{(pass ? "PASS" : "FAIL")}  {name}{(pass || evidence.Length == 0 ? "" : "  — " + evidence)}");
+    if (!pass) failures++;
+}
+
+static TransmissionRecord Rec(string sni, string ip, DateTime ts, long bytes = 12_000) => new()
+{
+    Sni = sni, RemoteIp = ip, TsUtc = ts, ClientBytes = bytes,
+    Image = @"C:\Program Files\Google\Chrome\Application\chrome.exe", Pid = 1000,
+};
+
+DateTime T0 = DateTime.UtcNow;
+
+// ─────────────────────────────────────────────────────────────────────
+// 1. Fingerprint — edge dispersion (the steering signal)
+// ─────────────────────────────────────────────────────────────────────
+var dispersed = Enumerable.Range(0, 8)
+    .Select(i => Rec("chat.z.ai", $"47.246.23.{140 + i}", T0.AddMinutes(i * 5)))
+    .ToList();
+var fpDispersed = SiteFingerprintService.Fingerprint(dispersed, baselineEdges: 1);
+Check("dispersion: 8 edges flagged as struggling", fpDispersed.LooksStruggling);
+Check("dispersion: edge count correct", fpDispersed.Edges.Count == 8, $"got {fpDispersed.Edges.Count}");
+Check("dispersion: signal names the count",
+    fpDispersed.Signals.Any(s => s.Contains("8 different server addresses")), string.Join(" | ", fpDispersed.Signals));
+
+// ─────────────────────────────────────────────────────────────────────
+// 2. Fingerprint — 5-second burst (the retry-race signal)
+// ─────────────────────────────────────────────────────────────────────
+var burst = new List<TransmissionRecord>
+{
+    Rec("chat.z.ai", "47.246.23.146", T0.AddSeconds(0)),
+    Rec("chat.z.ai", "47.246.23.146", T0.AddSeconds(0.4)),
+    Rec("chat.z.ai", "47.246.23.146", T0.AddSeconds(0.9)),
+    Rec("chat.z.ai", "47.246.23.146", T0.AddMinutes(10)),
+};
+var fpBurst = SiteFingerprintService.Fingerprint(burst, baselineEdges: 1);
+Check("burst: one 5s window detected", fpBurst.BurstWindows == 1, $"got {fpBurst.BurstWindows}");
+Check("burst: FirstBurstUtc set", fpBurst.FirstBurstUtc.HasValue);
+
+// ─────────────────────────────────────────────────────────────────────
+// 3. Fingerprint — single-edge churn + calm-site negative
+// ─────────────────────────────────────────────────────────────────────
+var churn = Enumerable.Range(0, 5)
+    .Select(i => Rec("api.github.com", "140.82.114.3", T0.AddSeconds(i * 8)))
+    .ToList();
+var fpChurn = SiteFingerprintService.Fingerprint(churn, baselineEdges: 1);
+Check("churn: 5 same-edge connects within a minute", fpChurn.MaxSameEdgePerMinute == 5,
+    $"got {fpChurn.MaxSameEdgePerMinute}");
+Check("churn: churn signal fired", fpChurn.Signals.Any(s => s.Contains("within a minute")));
+
+var calm = new List<TransmissionRecord>
+{
+    Rec("api.github.com", "140.82.114.3", T0),
+    Rec("api.github.com", "140.82.114.3", T0.AddMinutes(55)),
+};
+var fpCalm = SiteFingerprintService.Fingerprint(calm, baselineEdges: 1);
+Check("calm site: no signals", !fpCalm.LooksStruggling, string.Join(" | ", fpCalm.Signals));
+
+// ─────────────────────────────────────────────────────────────────────
+// 4. Fingerprint — TopHosts + machine-wide baseline
+// ─────────────────────────────────────────────────────────────────────
+var mixed = new List<TransmissionRecord>(burst);
+mixed.AddRange(calm);
+mixed.AddRange(Enumerable.Range(0, 9).Select(i => Rec("zcode.z.ai", "47.246.23.189", T0.AddMinutes(i))));
+var top = SiteFingerprintService.TopHosts(mixed, 10);
+Check("TopHosts: busiest host first", top[0] == "zcode.z.ai", $"got {top.FirstOrDefault()}");
+var all = SiteFingerprintService.AllFingerprints(mixed);
+Check("AllFingerprints: three hosts", all.Count == 3, $"got {all.Count}");
+Check("BaselineEdgeCount: median across hosts", SiteFingerprintService.BaselineEdgeCount(all) == 1,
+    $"got {SiteFingerprintService.BaselineEdgeCount(all)}");
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. Verdict rules — synthetic probe reports
+// ─────────────────────────────────────────────────────────────────────
+SiteProbeService.SiteProbeReport Report(
+    List<SiteProbeService.EdgeProbe> edges,
+    List<SiteProbeService.DnsSample> dns = null,
+    List<SiteProbeService.ControlProbe> controls = null) => new()
+{
+    Host = "test",
+    Dns = new SiteProbeService.DnsResult
+    {
+        Host = "test",
+        Samples = dns ?? new List<SiteProbeService.DnsSample>
+            { new() { Ips = new List<string> { "1.2.3.4" } } },
+    },
+    Edges = edges,
+    Controls = controls ?? new List<SiteProbeService.ControlProbe>(),
+};
+
+var vBlocked = SiteVerdictService.Decide(null, Report(new List<SiteProbeService.EdgeProbe>
+{
+    new() { Ip = "1.2.3.4", TcpError = "connection refused" },
+    new() { Ip = "5.6.7.8", TcpError = "no TCP answer in 4000ms" },
+}));
+Check("verdict: all-TCP-failed → Blocked", vBlocked.Kind == SiteVerdictService.VerdictKind.Blocked, vBlocked.Kind.ToString());
+
+var vDrop = SiteVerdictService.Decide(null, Report(new List<SiteProbeService.EdgeProbe>
+{
+    new() { Ip = "47.246.23.220", TcpConnectMs = 30, TlsPlainMs = 54, TlsPlainVersion = "Tls12", TlsDefaultError = "timeout" },
+}, controls: new List<SiteProbeService.ControlProbe> { new() { Host = "ctl", TcpConnectMs = 11, TlsMs = 15 } }));
+Check("verdict: split hello shapes → HandshakeDropping", vDrop.Kind == SiteVerdictService.VerdictKind.HandshakeDropping, vDrop.Kind.ToString());
+Check("verdict: headline names the DROPPED shape",
+    vDrop.Headline.Contains("Windows-default handshake"), vDrop.Headline);
+
+var vSteer = SiteVerdictService.Decide(null, Report(
+    new List<SiteProbeService.EdgeProbe> { new() { Ip = "1.1.1.1", TcpConnectMs = 25, TlsDefaultMs = 50, TlsDefaultVersion = "Tls13", TlsPlainMs = 48, TlsPlainVersion = "Tls12" } },
+    dns: new List<SiteProbeService.DnsSample>
+    {
+        new() { Ips = new List<string> { "1.1.1.1" } },
+        new() { Ips = new List<string> { "2.2.2.2" } },
+        new() { Ips = new List<string> { "3.3.3.3" } },
+    }));
+Check("verdict: rotating DNS → Steering", vSteer.Kind == SiteVerdictService.VerdictKind.Steering, vSteer.Kind.ToString());
+
+var vFar = SiteVerdictService.Decide(null, Report(
+    new List<SiteProbeService.EdgeProbe> { new() { Ip = "9.9.9.9", TcpConnectMs = 210, TlsDefaultMs = 320, TlsDefaultVersion = "Tls13", TlsPlainMs = 300, TlsPlainVersion = "Tls12" } },
+    controls: new List<SiteProbeService.ControlProbe> { new() { Host = "ctl", TcpConnectMs = 10, TlsMs = 15 } }));
+Check("verdict: 20x control latency → FarAway", vFar.Kind == SiteVerdictService.VerdictKind.FarAway, vFar.Kind.ToString());
+
+var vHealthy = SiteVerdictService.Decide(fpCalm, Report(
+    new List<SiteProbeService.EdgeProbe> { new() { Ip = "140.82.114.3", TcpConnectMs = 40, TlsDefaultMs = 60, TlsDefaultVersion = "Tls13", TlsPlainMs = 58, TlsPlainVersion = "Tls12" } },
+    controls: new List<SiteProbeService.ControlProbe> { new() { Host = "ctl", TcpConnectMs = 30, TlsMs = 45 } }));
+Check("verdict: fast + calm → Healthy", vHealthy.Kind == SiteVerdictService.VerdictKind.Healthy, vHealthy.Kind.ToString());
+
+var vNone = SiteVerdictService.Decide(null, null);
+Check("verdict: no evidence → Insufficient", vNone.Kind == SiteVerdictService.VerdictKind.Insufficient, vNone.Kind.ToString());
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. LIVE dual-shape probe — loopback TLS server vs loopback black hole
+//    (the failure shape observed in the wild: TCP accepts, TLS hellos
+//    are never answered)
+// ─────────────────────────────────────────────────────────────────────
+using var rsa = RSA.Create(2048);
+var certReq = new CertificateRequest("CN=sitedoctor-selftest", rsa,
+    HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+// schannel's server side refuses certs without the server-auth EKU —
+// the handshake then dies with a client-side EOF, which is exactly what
+// this test must NOT mistake for its own black-hole path.
+certReq.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+    new OidCollection { new("1.3.6.1.5.5.7.3.1") }, false));
+using X509Certificate2 cert = certReq.CreateSelfSigned(
+    DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+
+var healthyListener = new TcpListener(IPAddress.Loopback, 0);
+healthyListener.Start();
+int healthyPort = ((IPEndPoint)healthyListener.LocalEndpoint).Port;
+int serverEphemeralErrors = 0;
+var healthyServer = Task.Run(async () =>
+{
+    // Three connections arrive: the timing-only connect, then one per
+    // hello shape — answer the TLS ones; the timing one EOFs harmlessly.
+    // NOTE: a machine whose OS hardening leaves schannel unable to create
+    // ephemeral keys can't host TLS at all ("platform does not support
+    // ephemeral keys") — counted and reported as SKIP below, because the
+    // thing under test is the PROBE, and its black-hole half still runs.
+    for (int i = 0; i < 3; i++)
+    {
+        var client = await healthyListener.AcceptTcpClientAsync();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var ssl = new SslStream(client.GetStream(), false);
+                await ssl.AuthenticateAsServerAsync(cert, false, SslProtocols.None, false);
+                await Task.Delay(50); // hold it open briefly, like a real server
+            }
+            catch (AuthenticationException ex) when (ex.Message.Contains("ephemeral keys"))
+            {
+                Interlocked.Increment(ref serverEphemeralErrors);
+            }
+            catch { /* probe closed its side first — fine */ }
+            finally { client.Dispose(); }
+        });
+    }
+});
+
+var blackHoleListener = new TcpListener(IPAddress.Loopback, 0);
+blackHoleListener.Start();
+int blackHolePort = ((IPEndPoint)blackHoleListener.LocalEndpoint).Port;
+var blackHoleServer = Task.Run(async () =>
+{
+    for (int i = 0; i < 3; i++) // TCP connect + two hello attempts
+    {
+        var client = await blackHoleListener.AcceptTcpClientAsync();
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(10)); } // accept, then say nothing
+            catch { }
+            finally { client.Dispose(); }
+        });
+    }
+});
+
+var probe = new SiteProbeService();
+var ops = new List<string>();
+void Log(string kind, string detail) { ops.Add($"[{kind}] {detail}"); }
+
+var healthyEdge = await probe.ProbeEdgeAsync("127.0.0.1", "localhost", Log, CancellationToken.None, healthyPort);
+Check("live: healthy server TCP ok", healthyEdge.TcpConnectMs.HasValue);
+
+bool healthyTlsUnavailable = healthyEdge.TlsDefaultMs == null &&
+                             serverEphemeralErrors > 0;
+if (healthyTlsUnavailable)
+{
+    Console.WriteLine("SKIP  live: healthy-server hello checks — this machine's schannel cannot host TLS " +
+                      "(\u201Cplatform does not support ephemeral keys\u201D, OS hardening). The probe's " +
+                      "black-hole half below still proves the detection path; hello-acceptance is covered " +
+                      "by the offline split-shape verdict checks.");
+}
+else
+{
+    Check("live: healthy server default hello ok",
+        healthyEdge.TlsDefaultMs.HasValue && !string.IsNullOrEmpty(healthyEdge.TlsDefaultVersion),
+        healthyEdge.TlsDefaultError ?? "(no error)");
+    Check("live: healthy server plain hello ok",
+        healthyEdge.TlsPlainMs.HasValue && !string.IsNullOrEmpty(healthyEdge.TlsPlainVersion),
+        healthyEdge.TlsPlainError ?? "(no error)");
+}
+
+var blackHoleEdge = await probe.ProbeEdgeAsync("127.0.0.1", "localhost", Log, CancellationToken.None, blackHolePort);
+Check("live: black hole TCP still accepts", blackHoleEdge.TcpConnectMs.HasValue, blackHoleEdge.TcpError ?? "");
+Check("live: black hole drops default hello (timeout)",
+    !blackHoleEdge.TlsDefaultMs.HasValue && !string.IsNullOrEmpty(blackHoleEdge.TlsDefaultError),
+    blackHoleEdge.TlsDefaultError ?? "");
+Check("live: black hole drops plain hello (timeout)",
+    !blackHoleEdge.TlsPlainMs.HasValue && !string.IsNullOrEmpty(blackHoleEdge.TlsPlainError),
+    blackHoleEdge.TlsPlainError ?? "");
+Check("live: every operation was logged",
+    ops.Count >= 6, $"got {ops.Count}: {string.Join(" | ", ops)}");
+
+// And the split pair produces the HandshakeDropping verdict, end to end.
+// Control numbers come from the live healthy server when this machine can
+// host TLS; otherwise synthetic (the mapping is what's under test).
+var vLive = SiteVerdictService.Decide(null, new SiteProbeService.SiteProbeReport
+{
+    Host = "localhost",
+    Dns = new SiteProbeService.DnsResult
+    {
+        Host = "localhost",
+        Samples = new List<SiteProbeService.DnsSample> { new() { Ips = new List<string> { "127.0.0.1" } } },
+    },
+    Edges = new List<SiteProbeService.EdgeProbe> { blackHoleEdge },
+    Controls = new List<SiteProbeService.ControlProbe>
+    {
+        healthyTlsUnavailable
+            ? new() { Host = "synthetic-ctl", TcpConnectMs = 5, TlsMs = 10 }
+            : new() { Host = "localhost", TcpConnectMs = healthyEdge.TcpConnectMs, TlsMs = healthyEdge.TlsDefaultMs },
+    },
+});
+Check("live: black-hole edge + healthy control → HandshakeDropping",
+    vLive.Kind == SiteVerdictService.VerdictKind.HandshakeDropping, vLive.Kind.ToString());
+
+// And when the control fails the same way, the finger turns around and
+// points at the LOCAL stack — the LocalTlsBroken rule.
+var vLocalBroken = SiteVerdictService.Decide(null, new SiteProbeService.SiteProbeReport
+{
+    Host = "localhost",
+    Dns = new SiteProbeService.DnsResult
+    {
+        Host = "localhost",
+        Samples = new List<SiteProbeService.DnsSample> { new() { Ips = new List<string> { "127.0.0.1" } } },
+    },
+    Edges = new List<SiteProbeService.EdgeProbe> { blackHoleEdge },
+    Controls = new List<SiteProbeService.ControlProbe>
+    {
+        new() { Host = "ctl", TcpConnectMs = 8, Error = "server never answered" },
+    },
+});
+Check("live: all handshakes fail incl. control → LocalTlsBroken",
+    vLocalBroken.Kind == SiteVerdictService.VerdictKind.LocalTlsBroken, vLocalBroken.Kind.ToString());
+
+healthyListener.Stop();
+blackHoleListener.Stop();
+
+// ─────────────────────────────────────────────────────────────────────
+// 7. RunAsync caps — 10 extra edges must collapse to MaxEdgesPerRun
+// ─────────────────────────────────────────────────────────────────────
+var manyEdges = Enumerable.Range(1, 10).Select(i => $"10.0.0.{i}").ToList();
+var capped = await probe.RunAsync("localhost", manyEdges, controlHosts: Array.Empty<string>(),
+    dnsSampleInterval: TimeSpan.FromMilliseconds(10));
+Check("caps: at most 4 edges probed", capped.Edges.Count <= SiteProbeService.MaxEdgesPerRun,
+    $"got {capped.Edges.Count}");
+Check("caps: 5 DNS samples taken", capped.Dns.Samples.Count == SiteProbeService.MaxDnsSamples,
+    $"got {capped.Dns.Samples.Count}");
+Check("caps: DNS ops logged", capped.Operations.Count(o => o.Kind == "dns") == SiteProbeService.MaxDnsSamples,
+    $"got {capped.Operations.Count(o => o.Kind == "dns")}");
+Check("caps: localhost resolved to loopback",
+    capped.Dns.DistinctIps.All(ip => ip == "127.0.0.1"), string.Join(",", capped.Dns.DistinctIps));
+
+// ─────────────────────────────────────────────────────────────────────
+Console.WriteLine(failures == 0 ? "\nSiteDoctorSelfTest: ALL PASS" : $"\nSiteDoctorSelfTest: {failures} FAILURE(S)");
+return failures == 0 ? 0 : 1;

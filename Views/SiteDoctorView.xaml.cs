@@ -166,6 +166,8 @@ namespace AutoCommand.Views
             {
                 SiteVerdictService.VerdictKind.Blocked =>
                     (Hex("#3A1414"), Hex("#E5534B"), Hex("#FF8A80")),
+                SiteVerdictService.VerdictKind.LocalTlsBroken =>
+                    (Hex("#3A1414"), Hex("#E5534B"), Hex("#FF8A80")),
                 SiteVerdictService.VerdictKind.HandshakeDropping =>
                     (Hex("#3A2E14"), Hex("#E5A631"), Hex("#E5A631")),
                 SiteVerdictService.VerdictKind.Steering =>

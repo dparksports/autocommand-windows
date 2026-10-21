@@ -81,6 +81,10 @@
     <!-- Net watch self-test: dual-family TCP table + Sysmon archive engine
          (watermark dedupe, rotation, search, prune — see NetWatchSelfTest\) -->
     <Compile Remove="NetWatchSelfTest\**" />
+    <!-- Site doctor self-test: fingerprint + verdict rules offline, and the
+         dual-shape TLS probe against live loopback listeners — one that
+         answers handshakes, one that black-holes them (see SiteDoctorSelfTest\) -->
+    <Compile Remove="SiteDoctorSelfTest\**" />
     <!-- Vendored engine: compiled through its own ProjectReference — without
          this exclusion the default glob would pull its .cs into the app
          assembly too (duplicate types, and the CLI's top-level Program). -->

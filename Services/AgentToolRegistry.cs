@@ -109,6 +109,18 @@ namespace AutoCommand.Services
                 false,
                 a => GetTransmissions(a)),
 
+            new Tool(
+                "diagnose_site",
+                "Run the 'Why is this site slow?' pipeline for one hostname: passive fingerprint from the " +
+                "recorded-transmissions archive (edge dispersion, retry bursts), then a capped live probe run " +
+                "(~10-25 quick operations, every one listed in the result) — DNS rotation sampling, per-edge TCP " +
+                "plus two TLS hello shapes, control-host comparison — and the plain-English verdict with evidence. " +
+                "Read-only; nothing is blocked, killed or changed. Takes roughly 30 seconds.",
+                Schema(("host", "Hostname to diagnose (e.g. chat.z.ai)", true),
+                       ("minutes", "Archive lookback window in minutes (default 1440)", false)),
+                false,
+                a => DiagnoseSite(a)),
+
             // ── mutating: only present when the session allows, each call confirmed ──
 
             new Tool(
@@ -533,6 +545,114 @@ namespace AutoCommand.Services
                 });
             }
             return ToJson(new JsonObject { ["type"] = "transmissions", ["rows"] = arr, ["row_count"] = arr.Count });
+        }
+
+        /// <summary>
+        /// diagnose_site: the tab's whole pipeline over the bridge — same
+        /// engines, same caps, same honest verdicts. The bridge handler runs
+        /// on a background thread; DNS sampling is tightened to 3s so the
+        /// whole call lands around 30 seconds.
+        /// </summary>
+        private static string DiagnoseSite(JsonObject a)
+        {
+            string host = a["host"]?.GetValue<string>()?.Trim().TrimEnd('.');
+            if (string.IsNullOrEmpty(host)) return "Missing 'host' — the hostname to diagnose.";
+            int minutes = Math.Clamp(a["minutes"]?.GetValue<int>() ?? 1440, 1, 60 * 24 * 30);
+
+            var rows = TransmissionsArchiveService.Read(4000, null, null, DateTime.UtcNow.AddMinutes(-minutes));
+            var siteRows = rows.Where(r => string.Equals(r.Sni, host, StringComparison.OrdinalIgnoreCase)).ToList();
+            var all = SiteFingerprintService.AllFingerprints(rows);
+            var fingerprint = SiteFingerprintService.Fingerprint(
+                siteRows, SiteFingerprintService.BaselineEdgeCount(all));
+
+            var controls = SiteFingerprintService.TopHosts(rows, 10)
+                .Where(h => !string.Equals(h, host, StringComparison.OrdinalIgnoreCase))
+                .Take(SiteProbeService.MaxControlHosts)
+                .ToList();
+            if (controls.Count == 0) controls = new List<string> { "example.com" };
+
+            SiteProbeService.SiteProbeReport report;
+            try
+            {
+                report = SiteProbeService.Shared.RunAsync(
+                    host,
+                    fingerprint.Edges.Select(e => e.Ip),
+                    controls,
+                    progress: null,
+                    CancellationToken.None,
+                    dnsSampleInterval: TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+            }
+            catch (ArgumentException ex) { return ex.Message; }
+
+            var verdict = SiteVerdictService.Decide(fingerprint, report);
+
+            var edgeArr = new JsonArray();
+            foreach (var e in report.Edges)
+                edgeArr.Add(new JsonObject
+                {
+                    ["ip"] = e.Ip,
+                    ["tcp_ms"] = e.TcpConnectMs,
+                    ["tcp_error"] = e.TcpError,
+                    ["tls_default_ms"] = e.TlsDefaultMs,
+                    ["tls_default_version"] = e.TlsDefaultVersion,
+                    ["tls_default_error"] = e.TlsDefaultError,
+                    ["tls_plain_ms"] = e.TlsPlainMs,
+                    ["tls_plain_version"] = e.TlsPlainVersion,
+                    ["tls_plain_error"] = e.TlsPlainError,
+                });
+
+            var controlArr = new JsonArray();
+            foreach (var c in report.Controls)
+                controlArr.Add(new JsonObject
+                {
+                    ["host"] = c.Host,
+                    ["tcp_ms"] = c.TcpConnectMs,
+                    ["tls_ms"] = c.TlsMs,
+                    ["error"] = c.Error,
+                });
+
+            var evidenceArr = new JsonArray();
+            foreach (var line in verdict.Evidence) evidenceArr.Add(line);
+
+            var signalArr = new JsonArray();
+            foreach (var s in fingerprint.Signals) signalArr.Add(s);
+
+            var opsArr = new JsonArray();
+            foreach (var op in report.Operations.Take(60))
+                opsArr.Add($"[{op.Kind}] {op.Detail}");
+
+            var ipArr = new JsonArray();
+            foreach (var ip in report.Dns.DistinctIps) ipArr.Add(ip);
+
+            return ToJson(new JsonObject
+            {
+                ["type"] = "site_diagnosis",
+                ["host"] = host,
+                ["verdict"] = new JsonObject
+                {
+                    ["kind"] = verdict.Kind.ToString(),
+                    ["headline"] = verdict.Headline,
+                    ["next_step"] = verdict.NextStep,
+                    ["evidence"] = evidenceArr,
+                },
+                ["fingerprint"] = new JsonObject
+                {
+                    ["conversations"] = fingerprint.Conversations,
+                    ["distinct_edges"] = fingerprint.Edges.Count,
+                    ["burst_windows"] = fingerprint.BurstWindows,
+                    ["window_local"] = fingerprint.SpanDisplay,
+                    ["signals"] = signalArr,
+                },
+                ["probes"] = new JsonObject
+                {
+                    ["dns_samples"] = report.Dns.Samples.Count,
+                    ["dns_distinct_ips"] = ipArr,
+                    ["dns_rotated"] = report.Dns.AnswerRotated,
+                    ["edges"] = edgeArr,
+                    ["controls"] = controlArr,
+                },
+                ["operations"] = opsArr,
+            });
         }
 
         // ── mutating handlers (already user-confirmed when reached) ───────
