@@ -262,6 +262,63 @@ namespace AutoCommand.Services
         private long _decrypted;
         private long _noKeys;
 
+        /// <summary>
+        /// Entry point for layer-3 intercept records (InterceptProxyService):
+        /// same treatment as captured flows — HTTP decode for message
+        /// counts, archive + body cache, per-image tally, UI event. Works
+        /// even when the watch is off; the archive makes rows visible
+        /// whenever the tab loads.
+        /// </summary>
+        public void IngestIntercepted(TransmissionRecord record, byte[] requestStream, byte[] responseStream, string host)
+        {
+            if (record == null) return;
+            try
+            {
+                int messageCount = 0;
+                var kinds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var msg in HttpStreamDecoder.Decode(requestStream, true, alpn: null)) { messageCount++; kinds.Add(msg.Kind); }
+                foreach (var msg in HttpStreamDecoder.Decode(responseStream, false, alpn: null)) { messageCount++; kinds.Add(msg.Kind); }
+                record.MessageCount = messageCount;
+                record.ContentKinds = string.Join(", ", kinds.Where(k => k != null));
+
+                if (!string.IsNullOrEmpty(host))
+                {
+                    if (System.Net.IPAddress.TryParse(host, out var ip))
+                    {
+                        record.RemoteIp = host;
+                        ResolveProvider(record, host);
+                    }
+                    else
+                    {
+                        // Hostname: resolve in the background, then attribute.
+                        Task.Run(() =>
+                        {
+                            try
+                            {
+                                var addresses = System.Net.Dns.GetHostAddresses(host);
+                                if (addresses is { Length: > 0 })
+                                {
+                                    record.RemoteIp = addresses[0].ToString();
+                                    ResolveProvider(record, record.RemoteIp);
+                                }
+                            }
+                            catch { /* hostname unresolvable post-mortem — provider stays Unclassified */ }
+                        });
+                    }
+                }
+
+                TransmissionsArchiveService.Append(record, requestStream, responseStream);
+                if (record.HasContent)
+                    CacheBodies(record.Id, requestStream, responseStream);
+                TallyImage(record);
+                OnRecord?.Invoke(record);
+            }
+            catch (Exception)
+            {
+                // An intercept row must never break the session
+            }
+        }
+
         private static byte[] ConcatAppData(TlsDecryptResult result, bool fromClient)
         {
             var parts = result.Records

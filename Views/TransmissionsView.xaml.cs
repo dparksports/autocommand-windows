@@ -46,6 +46,7 @@ namespace AutoCommand.Views
         private List<HttpStreamDecoder.HttpMessage> _messages = new();
         private DateTime _archiveStatusAt = DateTime.MinValue;
         private (int Days, long Bytes) _archiveStatus;
+        private System.Windows.Threading.DispatcherTimer _bannerTimer;
 
         private const int TextCapBytes = 512 * 1024;
         private const int HexCapBytes = 256 * 1024;
@@ -89,9 +90,17 @@ namespace AutoCommand.Views
             _pipeline.OnError += ShowError;
             _pipeline.OnBigEncryptedUpload += OnBigEncryptedUpload;
 
+            InterceptProxyService.Shared.OnSessionEnded += OnInterceptSessionEnded;
+            InterceptProxyService.Shared.OnStatus += message =>
+                Dispatcher.BeginInvoke(() => StatusText.Text = $"🛡 {message}");
+
             SystemKeylogCheck.IsChecked = TransmissionKeyService.IsSystemKeylogEnabled();
             SystemKeylogCheck.ToolTip = TransmissionKeyService.CoverageNote;
             BigOnlyCheck.IsChecked = _bigOnly;
+
+            _bannerTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _bannerTimer.Tick += (_, _) => UpdateInterceptBanner();
+            UpdateInterceptBanner();
         }
 
         private void StartWatching()
@@ -640,6 +649,81 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
+        // Layer 3: intercept sessions (Schannel apps, system components)
+        // -----------------------------------------------------------------------
+
+        private void InterceptBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var record = _selected;
+            if (record == null) return;
+
+            if (InterceptProxyService.Shared.IsRunning)
+            {
+                MessageBox.Show("An intercept session is already active. Stop it first (⏹ Stop now in the banner).",
+                    "🛡 Intercept", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string image = record.Image;
+            string display = record.ProcessDisplay;
+            var confirm = MessageBox.Show(
+                $"🛡 Intercept this process?\n\nTarget: {display} (PID {record.Pid})\n\n" +
+                "For the next 15 minutes (auto-reverts; fully reversible):\n" +
+                "  • A temporary 'AutoCommand Intercept CA' is trusted machine-wide, and removed\n" +
+                "    when the session ends.\n" +
+                "  • The system proxy (WinHTTP for services, WinINET for apps) points at a local\n" +
+                "    loopback proxy on this machine. Other apps' traffic is tunneled through\n" +
+                "    untouched — only the target PID is decrypted.\n" +
+                "  • The target's QUIC (UDP 443) is blocked so it falls back to TCP/TLS.\n" +
+                "  • Decrypted traffic appears in this tab as 'decrypted · intercept'.\n\n" +
+                "Certificate-pinned apps will fail their connections during the session — recorded\n" +
+                "here as 'refused intercept (pinning)'. Stop now restores proxy, firewall rule and\n" +
+                "CA immediately if anything misbehaves.",
+                "🛡 Intercept this process", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            string error = InterceptProxyService.Shared.StartSession(record.Pid, image);
+            if (error != null)
+            {
+                MessageBox.Show(error, "🛡 Intercept", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            UpdateInterceptBanner();
+        }
+
+        private void InterceptStopBtn_Click(object sender, RoutedEventArgs e) =>
+            InterceptProxyService.Shared.StopSession("stopped by user");
+
+        private void OnInterceptSessionEnded(string reason)
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                UpdateInterceptBanner();
+                StatusText.Text = $"🛡 Intercept ended ({reason}) — proxy, firewall rule and CA restored.";
+            });
+        }
+
+        private void UpdateInterceptBanner()
+        {
+            if (InterceptBanner == null) return; // during InitializeComponent
+            var intercept = InterceptProxyService.Shared;
+            if (!intercept.IsRunning)
+            {
+                InterceptBanner.Visibility = Visibility.Collapsed;
+                _bannerTimer?.Stop();
+                return;
+            }
+
+            InterceptBanner.Visibility = Visibility.Visible;
+            TimeSpan left = intercept.EndsAtUtc - DateTime.UtcNow;
+            if (left < TimeSpan.Zero) left = TimeSpan.Zero;
+            InterceptBannerText.Text =
+                $"🛡 INTERCEPT ACTIVE — {intercept.TargetDisplay} · local proxy 127.0.0.1:{intercept.Port} · " +
+                $"ends in {(int)left.TotalMinutes:00}:{left:ss} · other apps tunneled untouched · decrypted rows tagged 'decrypted · intercept'";
+            if (_bannerTimer != null && !_bannerTimer.IsEnabled) _bannerTimer.Start();
+        }
+
+        // -----------------------------------------------------------------------
         // Encrypted-upload toasts + "Apps without keys" + restart under watch
         // -----------------------------------------------------------------------
 
@@ -840,8 +924,8 @@ namespace AutoCommand.Views
                 image.StartsWith(windowsRoot + "/", StringComparison.OrdinalIgnoreCase))
                 return $"This is a Windows system component (under {windowsRoot}).\n\n" +
                        "System components use Schannel, which never writes TLS session keys — restarting\n" +
-                       "cannot make their traffic decryptable. The row keeps their full metadata\n" +
-                       "(destination, sizes, timing), which is the honest ceiling for system components.";
+                       "cannot make their traffic decryptable. Use 🛡 Intercept this process instead: it is\n" +
+                       "the layer built for exactly these apps, time-boxed and fully reversible.";
 
             if (image.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) >= 0)
                 return "This is a Store (UWP) app — Windows starts those through app activation,\n" +

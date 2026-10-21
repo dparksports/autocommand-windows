@@ -7,13 +7,25 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="6"/>
             <RowDefinition Height="300"/>
         </Grid.RowDefinitions>
 
+        <!-- Intercept session banner (layer 3) -->
+        <Border x:Name="InterceptBanner" Grid.Row="0" Background="#3A2E14" BorderBrush="#E5A631"
+                BorderThickness="1" CornerRadius="4" Padding="12,6" Margin="0,0,0,10" Visibility="Collapsed">
+            <DockPanel>
+                <Button x:Name="InterceptStopBtn" DockPanel.Dock="Right" Content="⏹ Stop now" Style="{StaticResource DangerButton}"
+                        Click="InterceptStopBtn_Click" Margin="12,0,0,0" Padding="10,2" FontSize="11"/>
+                <TextBlock x:Name="InterceptBannerText" Foreground="#E5A631" FontSize="11" VerticalAlignment="Center"
+                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
         <!-- Header -->
-        <Grid Grid.Row="0" Margin="0,0,0,12">
+        <Grid Grid.Row="1" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -38,7 +50,7 @@
         </Grid>
 
         <!-- Status + filter -->
-        <Border Grid.Row="1" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
+        <Border Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -63,7 +75,7 @@
         </Border>
 
         <!-- Flow grid -->
-        <DataGrid Grid.Row="2" x:Name="FlowGrid" SelectionMode="Single" AutoGenerateColumns="False" IsReadOnly="True"
+        <DataGrid Grid.Row="3" x:Name="FlowGrid" SelectionMode="Single" AutoGenerateColumns="False" IsReadOnly="True"
                   SelectionChanged="FlowGrid_SelectionChanged" PreviewMouseRightButtonDown="FlowGrid_PreviewMouseRightButtonDown">
             <DataGrid.ContextMenu>
                 <ContextMenu>
@@ -107,11 +119,11 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <GridSplitter Grid.Row="3" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+        <GridSplitter Grid.Row="4" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
                       Background="Transparent" ShowsPreview="False" ResizeBehavior="PreviousAndNext"/>
 
         <!-- Detail pane -->
-        <Grid Grid.Row="4" Margin="0,8,0,0">
+        <Grid Grid.Row="5" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="360"/>
                 <ColumnDefinition Width="*"/>
@@ -125,6 +137,9 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <StackPanel x:Name="EncryptedActionsPanel" Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8" Visibility="Collapsed">
+                        <Button x:Name="InterceptBtn" Content="🛡 Intercept this process…" Style="{StaticResource DangerButton}"
+                                Click="InterceptBtn_Click" Margin="0,0,8,0" FontSize="11"
+                                ToolTip="Layer 3: a time-boxed local intercept for apps that cannot write TLS keys (Schannel system components included). Temporary CA + system proxy, scoped to this PID, auto-reverted."/>
                         <Button x:Name="RestartBtn" Content="🚀 Restart under watch…" Style="{StaticResource PrimaryButton}"
                                 Click="RestartBtn_Click" Margin="0,0,8,0" FontSize="11"
                                 ToolTip="Terminate this app's running instance(s) and relaunch it with the same command line, with TLS key capture applied — its next connections decrypt."/>

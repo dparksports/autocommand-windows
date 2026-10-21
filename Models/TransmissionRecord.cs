@@ -56,9 +56,11 @@ namespace AutoCommand.Models
 
         /// <summary>"decrypted" · "encrypted (no keys)" · "not TLS" ·
         /// "no handshake" · "unsupported cipher" · "undecryptable", with an
-        /// optional " · truncated" suffix when the capture dropped bytes.</summary>
+        /// optional " · truncated" suffix when the capture dropped bytes.
+        /// Intercept-sourced rows use "decrypted · intercept …" variants.</summary>
         public string Status { get; set; }
-        public bool Decrypted => Status == "decrypted" || Status == "decrypted · truncated";
+        public bool Decrypted => Status != null &&
+                                 (Status == "decrypted" || Status.StartsWith("decrypted", StringComparison.Ordinal));
 
         /// <summary>The user-facing threshold this tab exists for: an upload
         /// larger than 10 KB deserves a row even when no keys existed.</summary>

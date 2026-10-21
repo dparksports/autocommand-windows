@@ -33,6 +33,11 @@ namespace AutoCommand
             // saved state before anything can be selected
             ApplyAdvancedTabs(Services.AdvancedTabsPrefs.Load());
 
+            // Layer-3 crash safety: if a previous run died mid-intercept, the
+            // journal on disk still describes the hooks it installed — undo
+            // them (proxy, firewall rule, CA) before anything else runs.
+            Services.InterceptSystemHooks.RecoverAfterCrash();
+
             InitializeEnforcer();
 
             // App-level TCP capture + traffic aggregation: one raw socket
@@ -241,6 +246,10 @@ namespace AutoCommand
             // Transmissions pipeline drains what the capture flush finalized
             // (up to its 3s budget), then releases its capture reference.
             Services.TransmissionsPipelineService.Shared.Stop();
+
+            // Layer 3 must never outlive the app: stop restores the system
+            // proxy, removes the QUIC block rule and untrusts the CA.
+            Services.InterceptProxyService.Shared.StopSession("app exit");
 
             Services.TlsKeylogService.CleanupAtExit(); // drop the rotated TLS keylog leftover
             base.OnClosed(e);
