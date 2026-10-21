@@ -85,6 +85,17 @@ namespace AutoCommand
         /// </summary>
         public void RaiseExternalThreat(string type, string details) => OnThreatDetected(type, details);
 
+        /// <summary>
+        /// Transmissions tab's encrypted-upload toasts: same Action Center
+        /// path as the enforcer's, but activating the toast selects the
+        /// Transmissions tab instead of just raising the window.
+        /// </summary>
+        public void ShowTransmissionsToast(string title, string message)
+        {
+            _trayNotifier?.ShowSecurityAlert(title, message, durationMs: 10000, onActivated: () =>
+                Dispatcher.Invoke(() => MainTabControl.SelectedItem = TransmissionsNavItem));
+        }
+
         // -------------------------------------------------------------------
         // Advanced investigation tabs — opt-in deep-dive surfaces, hidden
         // until Settings → Advanced investigation turns them on

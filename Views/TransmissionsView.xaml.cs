@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -86,6 +87,7 @@ namespace AutoCommand.Views
             _pipeline = TransmissionsPipelineService.Shared;
             _pipeline.OnRecord += OnRecord;
             _pipeline.OnError += ShowError;
+            _pipeline.OnBigEncryptedUpload += OnBigEncryptedUpload;
 
             SystemKeylogCheck.IsChecked = TransmissionKeyService.IsSystemKeylogEnabled();
             SystemKeylogCheck.ToolTip = TransmissionKeyService.CoverageNote;
@@ -236,6 +238,18 @@ namespace AutoCommand.Views
             _selected = record;
             _messages = new();
             MessageCombo.ItemsSource = null;
+
+            // Encrypted rows get their remediation actions right in the pane.
+            bool encryptedNoKeys = record?.Status != null && record.Status.Contains("no keys");
+            EncryptedActionsPanel.Visibility = encryptedNoKeys ? Visibility.Visible : Visibility.Collapsed;
+            if (encryptedNoKeys)
+            {
+                RestartBtn.Visibility = RestartBlockReason(record.Image) == null
+                    ? Visibility.Visible : Visibility.Collapsed;
+                bool ignoredApp = TransmissionsIgnoreList.IsIgnored(record.Image);
+                IgnoreBtn.Visibility = ignoredApp ? Visibility.Collapsed : Visibility.Visible;
+                UnignoreBtn.Visibility = ignoredApp ? Visibility.Visible : Visibility.Collapsed;
+            }
 
             if (record == null)
             {
@@ -626,6 +640,260 @@ namespace AutoCommand.Views
         }
 
         // -----------------------------------------------------------------------
+        // Encrypted-upload toasts + "Apps without keys" + restart under watch
+        // -----------------------------------------------------------------------
+
+        /// <summary>
+        /// Every &gt;10KB encrypted upload, unthrottled by design — except
+        /// the user's ignore list and AutoCommand itself. The toast jumps
+        /// straight to this tab when activated.
+        /// </summary>
+        private void OnBigEncryptedUpload(TransmissionRecord record)
+        {
+            if (string.IsNullOrEmpty(record.Image)) return;
+            if (TransmissionsIgnoreList.IsIgnored(record.Image)) return;
+            if (string.Equals(record.Image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase)) return;
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                (Window.GetWindow(this) as MainWindow)?.ShowTransmissionsToast(
+                    $"🔒 {record.ProcessDisplay} sent {record.UpDisplay} — encrypted, no keys",
+                    $"→ {record.ServerEndpoint} [{record.HostDisplay}] · {record.ProviderAndCountry}\n" +
+                    "Review for: restart the app under watch, or turn on key capture.");
+                UpdateStatus();
+            });
+        }
+
+        private static bool IsSelfImage(string image) =>
+            string.Equals(image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase);
+
+        private int NoKeysAppCount() =>
+            _pipeline?.GetImageStatsSnapshot().Count(s =>
+                s.EncryptedFlows > 0 &&
+                !TransmissionsIgnoreList.IsIgnored(s.Image) &&
+                !IsSelfImage(s.Image)) ?? 0;
+
+        private void NoKeysBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (NoKeysPopup.IsOpen) { NoKeysPopup.IsOpen = false; return; }
+            RebuildNoKeysPopup();
+            NoKeysPopup.IsOpen = true;
+        }
+
+        private void RebuildNoKeysPopup()
+        {
+            var items = _pipeline.GetImageStatsSnapshot()
+                .Where(s => s.EncryptedFlows > 0 &&
+                            !TransmissionsIgnoreList.IsIgnored(s.Image) &&
+                            !IsSelfImage(s.Image))
+                .Take(30)
+                .Select(s => new NoKeysItem
+                {
+                    Image = s.Image,
+                    ImageDisplay = Path.GetFileName(s.Image),
+                    Summary = $"{s.EncryptedFlows} encrypted · {s.DecryptedFlows} decrypted · " +
+                              $"last {s.LastEncryptedUtc.ToLocalTime():MM-dd HH:mm} · " +
+                              $"biggest upload {FormatBytes(s.LastEncryptedBiggestUpload)}",
+                    Pid = s.LastEncryptedPid,
+                    TsUtc = s.LastEncryptedUtc,
+                })
+                .ToList();
+            NoKeysList.ItemsSource = items;
+
+            var ignored = TransmissionsIgnoreList.All();
+            IgnoredHeader.Visibility = ignored.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            IgnoredList.ItemsSource = ignored;
+        }
+
+        private void NoKeysRestart_Click(object sender, RoutedEventArgs e)
+        {
+            if (((FrameworkElement)sender).DataContext is NoKeysItem item)
+                RestartUnderWatch(item.Image, item.Pid, item.TsUtc);
+        }
+
+        private void NoKeysIgnore_Click(object sender, RoutedEventArgs e)
+        {
+            if (((FrameworkElement)sender).DataContext is NoKeysItem item)
+            {
+                TransmissionsIgnoreList.Ignore(item.Image);
+                RebuildNoKeysPopup();
+                UpdateStatus();
+            }
+        }
+
+        private void IgnoredUnignore_Click(object sender, RoutedEventArgs e)
+        {
+            if (((FrameworkElement)sender).DataContext is string image)
+            {
+                TransmissionsIgnoreList.Unignore(image);
+                RebuildNoKeysPopup();
+                UpdateStatus();
+            }
+        }
+
+        private void EnableKeysBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Routes through the checkbox so the confirm dialog + hygiene
+            // path stays single-sourced.
+            SystemKeylogCheck.IsChecked = true;
+        }
+
+        private void IgnoreBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selected?.Image == null) return;
+            TransmissionsIgnoreList.Ignore(_selected.Image);
+            RenderDetail(_selected);
+            UpdateStatus();
+        }
+
+        private void UnignoreBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selected?.Image == null) return;
+            TransmissionsIgnoreList.Unignore(_selected.Image);
+            RenderDetail(_selected);
+            UpdateStatus();
+        }
+
+        private void RestartBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selected != null)
+                RestartUnderWatch(_selected.Image, _selected.Pid, _selected.TsUtc);
+        }
+
+        /// <summary>
+        /// The one-click path from "encrypted, no keys" to "decrypts": kill
+        /// the app's running instance(s), relaunch the recorded image with
+        /// the Sysmon-archived command line and SSLKEYLOGFILE applied.
+        /// Single-instance apps (browsers, Electron) get every instance
+        /// killed, or the relaunch would just forward to a survivor and
+        /// inherit nothing.
+        /// </summary>
+        private void RestartUnderWatch(string image, int pid, DateTime tsUtc)
+        {
+            string reason = RestartBlockReason(image);
+            if (reason != null)
+            {
+                MessageBox.Show(reason, "🚀 Restart under watch", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            string commandLine = null, workingDir = null;
+            try
+            {
+                foreach (var createEvent in SysmonArchiveService.SearchCreateEvents(pid, 5)) // newest-first
+                {
+                    if (tsUtc != default && createEvent.TsUtc > tsUtc.AddMinutes(2))
+                        continue; // this PID's later owner (reuse), not the one that sent
+                    commandLine = createEvent.Data.GetValueOrDefault("CommandLine");
+                    workingDir = createEvent.Data.GetValueOrDefault("CurrentDirectory");
+                    if (!string.IsNullOrEmpty(commandLine)) break;
+                }
+            }
+            catch { /* archive unavailable — relaunch bare, without arguments */ }
+            string args = SplitArgsFromImage(image, commandLine);
+
+            Process[] running = Array.Empty<Process>();
+            try { running = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(image)); }
+            catch { }
+            string killNote = running.Length > 0
+                ? $"This terminates {running.Length} running instance(s) — unsaved work in them is lost."
+                : "The app is not running right now.";
+
+            var confirm = MessageBox.Show(
+                $"Restart under watch:\n\n{image}\n" +
+                (args.Length > 0 ? $"arguments: {args}\n" : "(no arguments recorded)\n") +
+                $"\n{killNote}\n" +
+                "It relaunches immediately with TLS key capture applied, so its traffic\n" +
+                "decrypts here from the next connection on.",
+                "🚀 Restart under watch", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            foreach (var proc in running)
+            {
+                try { proc.Kill(); } catch { /* already exiting or protected — the relaunch still proceeds */ }
+            }
+            try
+            {
+                var started = TransmissionKeyService.LaunchUnderWatch(image, args, workingDir);
+                StatusText.Text = $"Launched '{Path.GetFileName(image)}' (PID {started?.Id}) under watch — " +
+                                  "its next TLS flow will decrypt.";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Relaunch failed: {ex.Message}", "🚀 Restart under watch",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        /// <summary>Why this image can never be restarted under watch, or
+        /// null when it can. System components get the honest Schannel
+        /// explanation instead of a broken offer.</summary>
+        private static string RestartBlockReason(string image)
+        {
+            if (string.IsNullOrEmpty(image))
+                return "No process image was recorded for this flow, so there is nothing to relaunch.";
+            if (IsSelfImage(image))
+                return "This is AutoCommand itself — it is not restarted from here.";
+
+            string windowsRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            if (image.StartsWith(windowsRoot + "\\", StringComparison.OrdinalIgnoreCase) ||
+                image.StartsWith(windowsRoot + "/", StringComparison.OrdinalIgnoreCase))
+                return $"This is a Windows system component (under {windowsRoot}).\n\n" +
+                       "System components use Schannel, which never writes TLS session keys — restarting\n" +
+                       "cannot make their traffic decryptable. The row keeps their full metadata\n" +
+                       "(destination, sizes, timing), which is the honest ceiling for system components.";
+
+            if (image.IndexOf("\\WindowsApps\\", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "This is a Store (UWP) app — Windows starts those through app activation,\n" +
+                       "so they cannot be relaunched with key capture from here.";
+            return null;
+        }
+
+        /// <summary>
+        /// Strips the exe token from a Sysmon command line, returning just
+        /// the arguments. Handles the quoted form, the bare-prefix form, and
+        /// a loader-embedded form; anything unrecognizable yields "" rather
+        /// than a mangled relaunch.
+        /// </summary>
+        private static string SplitArgsFromImage(string image, string commandLine)
+        {
+            if (string.IsNullOrWhiteSpace(commandLine)) return "";
+            string cmd = commandLine.Trim();
+
+            if (cmd.StartsWith('"'))
+            {
+                int close = cmd.IndexOf('"', 1);
+                if (close > 0 &&
+                    string.Equals(cmd[1..close], image, StringComparison.OrdinalIgnoreCase))
+                    return cmd[(close + 1)..].Trim();
+            }
+            if (cmd.StartsWith(image, StringComparison.OrdinalIgnoreCase))
+                return cmd[image.Length..].Trim().TrimStart('"');
+
+            int embedded = cmd.IndexOf(image, StringComparison.OrdinalIgnoreCase);
+            if (embedded >= 0)
+                return cmd[(embedded + image.Length)..].Trim().TrimStart('"');
+            return "";
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return $"{bytes}B";
+            if (bytes < 1048576) return $"{bytes / 1024.0:F1}KB";
+            return $"{bytes / 1048576.0:F1}MB";
+        }
+
+        /// <summary>One row of the "Apps without keys" popup.</summary>
+        public sealed class NoKeysItem
+        {
+            public string Image { get; set; }
+            public string ImageDisplay { get; set; }
+            public string Summary { get; set; }
+            public int Pid { get; set; }
+            public DateTime TsUtc { get; set; }
+        }
+
+        // -----------------------------------------------------------------------
         // Status + audit
         // -----------------------------------------------------------------------
 
@@ -651,6 +919,15 @@ namespace AutoCommand.Views
                 $"{_pipeline.EncryptedNoKeysCount} encrypted-no-keys · queue {_pipeline.LiveQueueDepth}" +
                 (days > 0 ? $" · archive {days} day(s), {size} on disk" : "") +
                 (_pipeline.DroppedCount > 0 ? $" · {_pipeline.DroppedCount} dropped (busy)" : "");
+
+            int noKeysApps = NoKeysAppCount();
+            NoKeysBtn.Content = noKeysApps > 0
+                ? $"🔓 Apps without keys ({noKeysApps})"
+                : "🔓 Apps without keys";
+            bool keysOn = TransmissionKeyService.IsSystemKeylogEnabled();
+            EnableKeysBtn.Visibility = _watching && !keysOn ? Visibility.Visible : Visibility.Collapsed;
+            if (PopupEnableKeysBtn != null)
+                PopupEnableKeysBtn.Visibility = keysOn ? Visibility.Collapsed : Visibility.Visible;
         }
 
         /// <summary>Agent-facing summary — metadata only, never bodies

@@ -50,6 +50,14 @@ namespace AutoCommand.Services
         public event Action<TransmissionRecord> OnRecord;
         public event Action<string> OnError;
 
+        /// <summary>
+        /// Every &gt;10KB upload that arrived encrypted with no keys — one
+        /// event per flow, deliberately unthrottled. The ignore-list filter
+        /// and any pacing live on the consumer (the view), not here: the
+        /// pipeline reports, it does not decide.
+        /// </summary>
+        public event Action<TransmissionRecord> OnBigEncryptedUpload;
+
         public long ProcessedCount => Interlocked.Read(ref _processed);
         public long DecryptedCount => Interlocked.Read(ref _decrypted);
         public long EncryptedNoKeysCount => Interlocked.Read(ref _noKeys);
@@ -211,7 +219,43 @@ namespace AutoCommand.Services
             }
 
             ResolveProvider(record, remoteIp);
+            TallyImage(record);
             OnRecord?.Invoke(record);
+
+            if (record.BigUpload && status == "encrypted (no keys)")
+                OnBigEncryptedUpload?.Invoke(record);
+        }
+
+        // ── per-image stats (drives "Apps without keys") ──────────────────
+
+        private readonly object _statsLock = new();
+        private readonly Dictionary<string, TransmissionsImageStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+
+        internal void TallyImage(TransmissionRecord record)
+        {
+            lock (_statsLock)
+            {
+                if (!_stats.TryGetValue(record.Image ?? "", out var stats))
+                    _stats[record.Image ?? ""] = stats = new TransmissionsImageStats { Image = record.Image ?? "" };
+                if (record.Decrypted) stats.DecryptedFlows++;
+                else if (record.Status != null && record.Status.Contains("no keys"))
+                {
+                    stats.EncryptedFlows++;
+                    stats.LastEncryptedUtc = record.TsUtc;
+                    stats.LastEncryptedPid = record.Pid;
+                    stats.LastEncryptedBiggestUpload = Math.Max(stats.LastEncryptedBiggestUpload, record.ClientBytes);
+                }
+            }
+        }
+
+        /// <summary>Snapshot of per-image counts, newest-encrypted first.</summary>
+        public List<TransmissionsImageStats> GetImageStatsSnapshot()
+        {
+            lock (_statsLock)
+                return _stats.Values
+                    .OrderByDescending(s => s.LastEncryptedUtc)
+                    .Select(s => s.Clone())
+                    .ToList();
         }
 
         private long _processed;
@@ -338,6 +382,23 @@ namespace AutoCommand.Services
         private static int RemotePortOf(string endpoint) =>
             endpoint != null && endpoint.LastIndexOf(':') > 0 &&
             int.TryParse(endpoint[(endpoint.LastIndexOf(':') + 1)..], out int port) ? port : 0;
+    }
+
+    /// <summary>Per-image counters for the "Apps without keys" suggestions:
+    /// how many of this image's TLS flows decrypted, how many arrived
+    /// encrypted with no keys, and enough about the most recent encrypted
+    /// one (pid + time) to recover its command line from the Sysmon archive
+    /// for a faithful restart-under-watch.</summary>
+    public sealed class TransmissionsImageStats
+    {
+        public string Image { get; set; }
+        public long DecryptedFlows { get; set; }
+        public long EncryptedFlows { get; set; }
+        public DateTime LastEncryptedUtc { get; set; }
+        public int LastEncryptedPid { get; set; }
+        public long LastEncryptedBiggestUpload { get; set; }
+
+        public TransmissionsImageStats Clone() => (TransmissionsImageStats)MemberwiseClone();
     }
 
     internal static class FlowPortHelper

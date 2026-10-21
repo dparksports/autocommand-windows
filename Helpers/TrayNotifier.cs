@@ -29,7 +29,17 @@ namespace AutoCommand.Helpers
         /// Shows a Windows Toast notification with a security warning.
         /// Appears in the Action Center even if the app is minimized.
         /// </summary>
-        public void ShowSecurityAlert(string title, string message, int durationMs = 10000)
+        public void ShowSecurityAlert(string title, string message, int durationMs = 10000) =>
+            ShowSecurityAlert(title, message, durationMs, null);
+
+        /// <summary>
+        /// Same toast, with a per-toast activation callback (fired alongside
+        /// the global ToastActivated event) so a specific toast can do more
+        /// than bring the window forward — e.g. select the tab it came from.
+        /// The callback may fire on a WinRT thread: marshal to the UI thread
+        /// inside it.
+        /// </summary>
+        public void ShowSecurityAlert(string title, string message, int durationMs, Action onActivated)
         {
             if (_disposed) return;
             try
@@ -53,7 +63,11 @@ namespace AutoCommand.Helpers
                 toastXml.LoadXml(xmlPayload);
 
                 var toast = new ToastNotification(toastXml);
-                toast.Activated += (s, e) => ToastActivated?.Invoke();
+                toast.Activated += (s, e) =>
+                {
+                    ToastActivated?.Invoke();
+                    try { onActivated?.Invoke(); } catch { /* a toast handler must never crash the app */ }
+                };
 
                 var notifier = ToastNotificationManager.CreateToastNotifier(AppId);
                 notifier.Show(toast);
