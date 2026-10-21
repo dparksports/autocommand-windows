@@ -32,7 +32,7 @@ One question the list can answer for itself: the **TX-only (no reply)** checkbox
 
 ![Where everything lives](Assets/app_map_infographic.png?v=oss3)
 
-The sidebar groups its tools by the question you're asking. **Watch** is everything that shows what's happening — including **Spawns**, one tab for "who launched this?": scheduled-task launches, Python programs and the svchost timeline sit side by side there, each with a dot that glows green while it records. **Contain** holds the stopping tools (firewall, telemetry sinkholes, Defender). **System** is the rest: AI access, privacy, settings. And watching never stops just because you looked at another screen — a feed runs until you stop it, not until you click away.
+The sidebar groups its tools by the question you're asking. **Watch** is everything that shows what's happening — including **Spawns**, one tab for "who launched this?": scheduled-task launches, Python programs and the svchost timeline sit side by side there, each with a dot that glows green while it records. When a site feels slow, **Why is this site slow?** runs a 60-second check — recorded traffic, a handful of handshakes, a comparison site — and says what it found in one plain sentence, with the math one click away. **Contain** holds the stopping tools (firewall, telemetry sinkholes, Defender). **System** is the rest: AI access, privacy, settings. And watching never stops just because you looked at another screen — a feed runs until you stop it, not until you click away.
 
 ## When something looks odd
 

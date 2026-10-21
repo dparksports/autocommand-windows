@@ -182,6 +182,18 @@ Both are plain, readable files. The tab reads Windows' own `Microsoft-Windows-Bi
 
 Outside that directory the tab only **reads**: the Sysmon operational channel (EID 1/5/3) and raw packets from the NIC on its own socket. The instrumentation itself is opt-in per python environment: two small files (`PyTraceHook_ac.py` + `.pth`) written into that environment's site-packages, tracked in the manifest, removable from the Instrument dialog. Nothing inside a venv is ever read for correlation; the interpreter binary is never touched.
 
+### Why is this site slow? (🩺 tab)
+
+Born from a real diagnosis (a site whose refreshes stalled for seconds): the archive said "zero server bytes everywhere," which was almost misread as "replies are blocked" until a control disproved it. The tab automates the corrected method — three engines, verdicts that never outrun their evidence.
+
+* **`SiteFingerprintService`** — passive: groups the Transmissions archive by SNI and reads edge dispersion (4+ server addresses where this machine's own median is 1–2), 5-second connection bursts (browser racing retries), and single-edge churn. Signals are evidence lines, never conclusions; the archive only keeps >10 KB or decrypted conversations, so counts are a sample.
+* **`SiteProbeService`** — active, hard-capped in code (~21 operations): 5 DNS resolves of the same name (rotation = short-TTL steering), per-edge TCP timing plus **two TLS hello shapes** (Windows-default vs plain TLS 1.2-only — a server that answers one and drops the other is the "works in one app, hangs in another" signature), and control-host handshakes so "your line is fine" is measured. Every operation lands verbatim in the report's log; certificates are not validated (transport behavior is measured, no credentials flow, nothing is changed).
+* **`SiteVerdictService`** — rules in priority order: Blocked → LocalTlsBroken (every handshake fails *including controls* — the local stack, a real post-hardening condition) → HandshakeDropping → Steering → FarAway → Healthy (with an honest "fast now, but history shows bursts" split). Each verdict ships evidence lines and one reversible next step; nothing is auto-applied.
+
+Read-only `diagnose_site` on the agent bridge runs the same pipeline (~30 s, DNS sampling tightened to 3 s). `SiteDoctorSelfTest\` compiles the shipping sources and proves: all fingerprint signals, every verdict rule, live loopback detection of the black-hole handshake shape (a listener that accepts TCP and never answers), and the caps. One SKIP is by design: a machine whose schannel cannot host TLS ("platform does not support ephemeral keys", observed after OS hardening) cannot run the healthy-server half — it says so loudly and still validates the rest.
+
+Related capture-honesty fix in the same work: `TcpStreamCaptureService` now requests `SIO_RCVALL_IPLEVEL` first (both directions at the IP layer, no NIC promiscuous dependency) with `RCVALL_ON` fallback, tallies inbound vs outbound packets per session, and the Transmissions tab shows a banner when the session is one-way — a 0 in Down then reads "not observed", not "nothing came back".
+
 The app collects **no usage telemetry** — nothing in it sends data anywhere on its own. (Usage analytics via Firebase/GA4 have been removed; the "Telemetry Opt-Out" section above is the Windows-telemetry hardening feature, unrelated.)
 
 ## MCP server (AgentProxy)
