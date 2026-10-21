@@ -227,6 +227,9 @@ namespace AutoCommand
             // Stop is idempotent.)
             Services.TcpStreamCaptureService.Shared.Stop();
             Services.TrafficAggregationService.Shared.Shutdown();
+            // Transmissions pipeline drains what the capture flush finalized
+            // (up to its 3s budget), then releases its capture reference.
+            Services.TransmissionsPipelineService.Shared.Stop();
 
             Services.TlsKeylogService.CleanupAtExit(); // drop the rotated TLS keylog leftover
             base.OnClosed(e);

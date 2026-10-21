@@ -64,6 +64,15 @@
                 </TabItem.Header>
                 <views:TrafficPatternsView x:Name="TrafficPatternsTab"/>
             </TabItem>
+            <TabItem x:Name="TransmissionsNavItem">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📡" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Transmissions" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:TransmissionsView x:Name="TransmissionsTab"/>
+            </TabItem>
 
             <!-- ═══ CONTAIN ═══ -->
             <TabItem IsEnabled="False" Focusable="False">
