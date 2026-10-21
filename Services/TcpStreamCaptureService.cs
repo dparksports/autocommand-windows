@@ -41,6 +41,25 @@ namespace AutoCommand.Services
         private Timer _sweepTimer;
         private int _running;
 
+        // Direction visibility for the whole capture session. Some NIC/driver
+        // combos deliver only outbound packets to a receive-all socket; when
+        // that happens the UI must say "not observed" instead of letting a
+        // zero read as "nothing ever came back".
+        private IPAddress _localIp;
+        private long _inboundPackets;
+        private long _outboundPackets;
+        private string _captureMode = "off";
+
+        /// <summary>Packets whose source was the local address (sent by this PC).</summary>
+        public long OutboundPackets => Interlocked.Read(ref _outboundPackets);
+        /// <summary>Packets whose source was a remote address (replies and other inbound).</summary>
+        public long InboundPackets => Interlocked.Read(ref _inboundPackets);
+        /// <summary>True once the session has seen at least one inbound packet.</summary>
+        public bool InboundSeen => Interlocked.Read(ref _inboundPackets) > 0;
+        /// <summary>"ip-level" · "on" · "off" — which SIO_RCVALL flavor is live.</summary>
+        public string CaptureMode => _captureMode;
+        public bool IsRunning => _running == 1;
+
         private static string FlowDir => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AutoCommand", "pytrace", "flows");
@@ -99,9 +118,26 @@ namespace AutoCommand.Services
                     _socket.Bind(new IPEndPoint(localIp, 0));
                     _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.HeaderIncluded, true);
 
-                    // RCVALL_ON — same proven setup as the svchost sniffer, on our own socket
-                    byte[] inValue = { 1, 0, 0, 0 };
-                    _socket.IOControl(IOControlCode.ReceiveAll, inValue, new byte[4]);
+                    // RCVALL_IPLEVEL first: it captures both directions at the
+                    // IP layer and, unlike RCVALL_ON, does not depend on the
+                    // NIC honoring promiscuous mode (on hardware that ignores
+                    // it, RCVALL_ON silently yields outbound-only captures).
+                    // RCVALL_ON stays as the fallback for older stacks.
+                    byte[] ipLevel = { 3, 0, 0, 0 };
+                    byte[] on = { 1, 0, 0, 0 };
+                    try
+                    {
+                        _socket.IOControl(IOControlCode.ReceiveAll, ipLevel, new byte[4]);
+                        _captureMode = "ip-level";
+                    }
+                    catch (SocketException)
+                    {
+                        _socket.IOControl(IOControlCode.ReceiveAll, on, new byte[4]);
+                        _captureMode = "on";
+                    }
+                    Interlocked.Exchange(ref _inboundPackets, 0);
+                    Interlocked.Exchange(ref _outboundPackets, 0);
+                    _localIp = localIp;
                     _socket.ReceiveTimeout = 2000;
 
                     var buffer = new byte[65535];
@@ -176,6 +212,14 @@ namespace AutoCommand.Services
 
                 var srcIp = new IPAddress(new ReadOnlySpan<byte>(buffer, 12, 4));
                 var dstIp = new IPAddress(new ReadOnlySpan<byte>(buffer, 16, 4));
+
+                // Session-level direction tally (null local IP = offline
+                // self-test feeding synthetic buffers — nothing to count).
+                if (_localIp != null)
+                {
+                    if (srcIp.Equals(_localIp)) Interlocked.Increment(ref _outboundPackets);
+                    else Interlocked.Increment(ref _inboundPackets);
+                }
 
                 int tcpOffset = ihl;
                 if (tcpOffset + 20 > totalLength) return;

@@ -99,8 +99,13 @@ namespace AutoCommand.Views
             BigOnlyCheck.IsChecked = _bigOnly;
 
             _bannerTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            _bannerTimer.Tick += (_, _) => UpdateInterceptBanner();
+            _bannerTimer.Tick += (_, _) =>
+            {
+                UpdateInterceptBanner();
+                UpdateCaptureBanner();
+            };
             UpdateInterceptBanner();
+            UpdateCaptureBanner();
         }
 
         private void StartWatching()
@@ -110,6 +115,7 @@ namespace AutoCommand.Views
             ToggleWatchBtn.Content = "Stop Watch";
             UpdateStatus();
             BackfillArchive();
+            if (_bannerTimer != null && !_bannerTimer.IsEnabled) _bannerTimer.Start();
         }
 
         private void StopWatching()
@@ -710,7 +716,8 @@ namespace AutoCommand.Views
             if (!intercept.IsRunning)
             {
                 InterceptBanner.Visibility = Visibility.Collapsed;
-                _bannerTimer?.Stop();
+                if (!TcpStreamCaptureService.Shared.IsRunning)
+                    _bannerTimer?.Stop();
                 return;
             }
 
@@ -721,6 +728,31 @@ namespace AutoCommand.Views
                 $"🛡 INTERCEPT ACTIVE — {intercept.TargetDisplay} · local proxy 127.0.0.1:{intercept.Port} · " +
                 $"ends in {(int)left.TotalMinutes:00}:{left:ss} · other apps tunneled untouched · decrypted rows tagged 'decrypted · intercept'";
             if (_bannerTimer != null && !_bannerTimer.IsEnabled) _bannerTimer.Start();
+        }
+
+        /// <summary>
+        /// Honest-UX gate for the Down column: when the capture session has
+        /// seen plenty of outbound TCP but not one inbound packet, the
+        /// adapter/driver is delivering a one-way view and a 0 in Down means
+        /// "not observed", not "nothing came back". The banner says exactly
+        /// that; it clears the moment a single reply is seen.
+        /// </summary>
+        private void UpdateCaptureBanner()
+        {
+            if (CaptureHealthBanner == null) return; // during InitializeComponent
+            var capture = TcpStreamCaptureService.Shared;
+            bool oneWayView = capture.IsRunning &&
+                              capture.OutboundPackets > 500 &&
+                              !capture.InboundSeen;
+            if (!oneWayView)
+            {
+                CaptureHealthBanner.Visibility = Visibility.Collapsed;
+                return;
+            }
+            CaptureHealthBannerText.Text =
+                $"⚠ This capture session sees what your PC sends but not the replies — a 0 in Down means \"not observed\", " +
+                $"not \"nothing came back\". ({capture.OutboundPackets:N0} packets out, 0 in · mode: {capture.CaptureMode})";
+            CaptureHealthBanner.Visibility = Visibility.Visible;
         }
 
         // -----------------------------------------------------------------------

@@ -13,16 +13,24 @@
             <RowDefinition Height="300"/>
         </Grid.RowDefinitions>
 
-        <!-- Intercept session banner (layer 3) -->
-        <Border x:Name="InterceptBanner" Grid.Row="0" Background="#3A2E14" BorderBrush="#E5A631"
-                BorderThickness="1" CornerRadius="4" Padding="12,6" Margin="0,0,0,10" Visibility="Collapsed">
-            <DockPanel>
-                <Button x:Name="InterceptStopBtn" DockPanel.Dock="Right" Content="⏹ Stop now" Style="{StaticResource DangerButton}"
-                        Click="InterceptStopBtn_Click" Margin="12,0,0,0" Padding="10,2" FontSize="11"/>
-                <TextBlock x:Name="InterceptBannerText" Foreground="#E5A631" FontSize="11" VerticalAlignment="Center"
-                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
-            </DockPanel>
-        </Border>
+        <!-- Session banners: intercept (layer 3) and capture-direction health -->
+        <StackPanel Grid.Row="0">
+            <Border x:Name="InterceptBanner" Background="#3A2E14" BorderBrush="#E5A631"
+                    BorderThickness="1" CornerRadius="4" Padding="12,6" Margin="0,0,0,10" Visibility="Collapsed">
+                <DockPanel>
+                    <Button x:Name="InterceptStopBtn" DockPanel.Dock="Right" Content="⏹ Stop now" Style="{StaticResource DangerButton}"
+                            Click="InterceptStopBtn_Click" Margin="12,0,0,0" Padding="10,2" FontSize="11"/>
+                    <TextBlock x:Name="InterceptBannerText" Foreground="#E5A631" FontSize="11" VerticalAlignment="Center"
+                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+            </Border>
+            <Border x:Name="CaptureHealthBanner" Background="#14243A" BorderBrush="#4A9EFF"
+                    BorderThickness="1" CornerRadius="4" Padding="12,6" Margin="0,0,0,10" Visibility="Collapsed"
+                    ToolTip="Some network adapters deliver only outbound packets to a capture socket. When that happens the Down column cannot prove a reply never came — it just didn't see one.">
+                <TextBlock x:Name="CaptureHealthBannerText" Foreground="#7FB8FF" FontSize="11" VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </Border>
+        </StackPanel>
 
         <!-- Header -->
         <Grid Grid.Row="1" Margin="0,0,0,12">
