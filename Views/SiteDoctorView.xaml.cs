@@ -24,15 +24,27 @@ namespace AutoCommand.Views
     {
         private CancellationTokenSource _runCts;
         private List<string> _suggestions = new();
+        /// <summary>All-traffic hosts — the control-site pool and the machine
+        /// baseline must not move just because the picker is filtered.</summary>
+        private List<string> _controlPool = new();
+        private List<string> _browsers = new();
+        private HashSet<string> _pinned = new(StringComparer.OrdinalIgnoreCase);
+        private List<string> _unblockTargets;
+
+        private static string PinsPath => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AutoCommand", "site-doctor-pins.json");
 
         public SiteDoctorView()
         {
             InitializeComponent();
+            LoadPins();
         }
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
             RefreshSuggestions();
+            UpdatePinButton();
         }
 
         private void UserControl_Unloaded(object sender, RoutedEventArgs e)
@@ -44,7 +56,9 @@ namespace AutoCommand.Views
         /// Hosts this machine has actually been talking to (from the
         /// Transmissions archive), plus the passive "struggling" hint — the
         /// archive sometimes already shows the dice-roll pattern before any
-        /// probe runs.
+        /// probe runs. The picker itself is user territory: pinned ★ sites
+        /// first, then the selected source's (all apps / one browser) hosts.
+        /// No built-in site list exists anywhere in this flow.
         /// </summary>
         private void RefreshSuggestions()
         {
@@ -52,8 +66,18 @@ namespace AutoCommand.Views
             {
                 var rows = TransmissionsArchiveService.Read(max: 2000,
                     sinceUtc: DateTime.UtcNow - TimeSpan.FromHours(24));
-                _suggestions = SiteFingerprintService.TopHosts(rows, 25);
-                HostBox.ItemsSource = _suggestions;
+                _controlPool = SiteFingerprintService.TopHosts(rows, 25);
+                _browsers = SiteFingerprintService.BrowsersSeen(rows);
+
+                BrowserFilterBox.SelectionChanged -= BrowserFilter_SelectionChanged; // rebuild, don't retrigger
+                BrowserFilterBox.Items.Clear();
+                BrowserFilterBox.Items.Add("All apps");
+                if (_pinned.Count > 0) BrowserFilterBox.Items.Add("★ Pinned sites");
+                foreach (string b in _browsers) BrowserFilterBox.Items.Add(b);
+                BrowserFilterBox.SelectedIndex = 0;
+                BrowserFilterBox.SelectionChanged += BrowserFilter_SelectionChanged;
+
+                ApplySuggestions();
 
                 var all = SiteFingerprintService.AllFingerprints(rows);
                 int baseline = SiteFingerprintService.BaselineEdgeCount(all);
@@ -82,6 +106,69 @@ namespace AutoCommand.Views
             catch { /* archive unreadable — the box just has no suggestions */ }
         }
 
+        private void BrowserFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (BrowserFilterBox.SelectedItem is string) ApplySuggestions();
+        }
+
+        /// <summary>Picker = pinned sites (★, in pin order) + the filtered
+        /// source's hosts, pinned ones not duplicated.</summary>
+        private void ApplySuggestions()
+        {
+            string filter = BrowserFilterBox.SelectedItem as string ?? "All apps";
+            IEnumerable<string> tail;
+            try
+            {
+                var rows = TransmissionsArchiveService.Read(max: 2000,
+                    sinceUtc: DateTime.UtcNow - TimeSpan.FromHours(24));
+                tail = filter == "★ Pinned sites"
+                    ? Enumerable.Empty<string>()
+                    : SiteFingerprintService.TopHosts(rows, 25,
+                        filter == "All apps" ? null : filter);
+            }
+            catch { tail = Enumerable.Empty<string>(); }
+
+            var list = _pinned.Select(p => "★ " + p).ToList();
+            list.AddRange(tail.Where(h => !_pinned.Contains(h)));
+            _suggestions = list;
+            HostBox.ItemsSource = list;
+        }
+
+        private void PinBtn_Click(object sender, RoutedEventArgs e)
+        {
+            string host = (HostBox.Text ?? "").Trim();
+            if (host.Length == 0) return;
+            if (_pinned.Contains(host)) _pinned.Remove(host); else _pinned.Add(host);
+            SavePins();
+            UpdatePinButton();
+            ApplySuggestions();
+        }
+
+        private void UpdatePinButton() =>
+            PinBtn.Content = _pinned.Contains((HostBox.Text ?? "").Trim()) ? "★ Pinned" : "☆ Pin";
+
+        private void LoadPins()
+        {
+            try
+            {
+                if (System.IO.File.Exists(PinsPath))
+                    _pinned = new HashSet<string>(
+                        System.IO.File.ReadAllLines(PinsPath).Where(l => l.Trim().Length > 0),
+                        StringComparer.OrdinalIgnoreCase);
+            }
+            catch { /* unreadable pins — start empty, never block the tab */ }
+        }
+
+        private void SavePins()
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(PinsPath));
+                System.IO.File.WriteAllLines(PinsPath, _pinned);
+            }
+            catch { /* unwritable disk — pins live for this session */ }
+        }
+
         private void StruggleHost_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button b && b.Content is string host)
@@ -104,6 +191,8 @@ namespace AutoCommand.Views
             VerdictPanel.Visibility = Visibility.Collapsed;
             MathExpander.Visibility = Visibility.Collapsed;
             OpsExpander.Visibility = Visibility.Collapsed;
+            UnblockBtn.Visibility = Visibility.Collapsed;
+            _unblockTargets = null;
             ProgressText.Text = "Reading recorded traffic…";
 
             try
@@ -119,8 +208,10 @@ namespace AutoCommand.Views
                     SiteFingerprintService.BaselineEdgeCount(all));
 
                 // Controls: two other hosts this machine actually uses —
-                // apples-to-apples beats a hardcoded benchmark.
-                var controls = _suggestions
+                // apples-to-apples beats a hardcoded benchmark. Always from
+                // the ALL-traffic pool so filtering the picker can't skew
+                // the comparison.
+                var controls = _controlPool
                     .Where(h => !string.Equals(h, host, StringComparison.OrdinalIgnoreCase))
                     .Take(2)
                     .ToList();
@@ -135,6 +226,7 @@ namespace AutoCommand.Views
                     SiteProbeService.Shared.RunAsync(host, extraEdges, controls, progress, ct), ct);
 
                 var verdict = SiteVerdictService.Decide(fingerprint, report);
+                MarkAutoCommandBlocked(verdict, report);
                 ShowVerdict(verdict, report);
                 ProgressText.Text =
                     $"Done in {(report.EndedUtc - report.StartedUtc).TotalSeconds:0}s · {report.Operations.Count} operations, all listed below.";
@@ -188,6 +280,95 @@ namespace AutoCommand.Views
                 .Select(op => $"{op.AtUtc.ToLocalTime():HH:mm:ss} [{op.Kind}] {op.Detail}")
                 .ToList();
             OpsExpander.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Crosses the probe's failed addresses against AutoCommand's own
+        /// blocked list (the BlockHitFeedService inventory cache). When a
+        /// failed edge IS blocked here, the evidence line says so and a
+        /// one-click unblock appears — "go hunt for it in the firewall" is
+        /// exactly the runaround this replaces.
+        /// </summary>
+        private void MarkAutoCommandBlocked(SiteVerdictService.Verdict verdict,
+            SiteProbeService.SiteProbeReport report)
+        {
+            try
+            {
+                BlockHitFeedService.Instance.Start();   // idempotent; populates the cache
+                var failedIps = report.Edges
+                    .Where(e => e.TcpConnectMs == null)
+                    .Select(e => e.Ip)
+                    .Where(ip => !string.IsNullOrEmpty(ip))
+                    .Distinct()
+                    .ToList();
+                _unblockTargets = failedIps
+                    .Where(ip => BlockHitFeedService.Instance.BlockedIp(ip) != null)
+                    .ToList();
+                if (_unblockTargets.Count == 0) { _unblockTargets = null; return; }
+
+                var blockedSet = _unblockTargets.ToHashSet(System.StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < verdict.Evidence.Count; i++)
+                {
+                    string line = verdict.Evidence[i];
+                    foreach (string ip in blockedSet)
+                    {
+                        if (line.StartsWith(ip + ":", System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            verdict.Evidence[i] = line + "  ← ON YOUR BLOCK LIST";
+                            break;
+                        }
+                    }
+                }
+
+                verdict.NextStep =
+                    $"{_unblockTargets.Count} of this site's addresses are on AutoCommand's block list — " +
+                    "unblock them right here with the button below, then re-run the check. " +
+                    verdict.NextStep;
+                UnblockBtn.Content = $"🚫 Unblock {_unblockTargets.Count} blocked address(es) for this site";
+                UnblockBtn.Visibility = Visibility.Visible;
+            }
+            catch { /* the verdict stands on its own if the lookup fails */ }
+        }
+
+        private async void UnblockBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_unblockTargets == null || _unblockTargets.Count == 0) return;
+            var targets = _unblockTargets.ToList();
+
+            var details = string.Join("\n", targets.Select(ip =>
+            {
+                var b = BlockHitFeedService.Instance.BlockedIp(ip);
+                string since = b?.Created?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "legacy rule";
+                return $"  {ip}   (blocked since {since})";
+            }));
+            var answer = MessageBox.Show(
+                $"Remove AutoCommand's firewall block rules for:\n{details}\n\n" +
+                "Only AutoCommand's own rules are touched — nothing else on the firewall changes, " +
+                "and you can re-block any address from the Blocks tab.",
+                "Unblock these addresses?", MessageBoxButton.YesNo, MessageBoxImage.Question,
+                MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+
+            UnblockBtn.IsEnabled = false;
+            try
+            {
+                int removed = 0;
+                foreach (string ip in targets)
+                    removed += await FirewallService.Instance.RemoveBlockRulesForIpAsync(ip);
+                _unblockTargets = null;
+                UnblockBtn.Visibility = Visibility.Collapsed;
+                ProgressText.Text =
+                    $"Unblocked — removed {removed} rule(s) across {targets.Count} address(es). " +
+                    "Re-run the check to confirm the site is reachable.";
+            }
+            catch (Exception ex)
+            {
+                ProgressText.Text = $"Unblock failed: {ex.Message}";
+            }
+            finally
+            {
+                UnblockBtn.IsEnabled = true;
+            }
         }
 
         private static Brush Hex(string hex) =>

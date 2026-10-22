@@ -45,16 +45,28 @@
         <!-- Input row -->
         <Grid Grid.Row="2" Margin="0,0,0,12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="340"/>
+                <ColumnDefinition Width="300"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
             <ComboBox x:Name="HostBox" IsEditable="True" StaysOpenOnEdit="True" Height="30" VerticalContentAlignment="Center"
-                      ToolTip="Type any site name, or pick one this machine has been talking to (from the Transmissions archive)."/>
-            <Button x:Name="RunBtn" Grid.Column="1" Content="▶ Run 60-second check" Style="{StaticResource PrimaryButton}"
-                    Height="30" Margin="12,0,0,0" Padding="14,0" Click="RunBtn_Click"
+                      ToolTip="Type any site name, pick one from your pinned ★ list, or pick one your selected browser has actually been visiting."/>
+            <Button x:Name="PinBtn" Grid.Column="1" Content="☆ Pin" Style="{StaticResource PrimaryButton}"
+                    Height="30" Margin="8,0,0,0" Padding="10,0" Click="PinBtn_Click"
+                    ToolTip="Pin/unpin the typed site to the top of the picker (kept on this PC, never a built-in list)."/>
+            <Button x:Name="RunBtn" Grid.Column="2" Content="▶ Run 60-second check" Style="{StaticResource PrimaryButton}"
+                    Height="30" Margin="8,0,0,0" Padding="14,0" Click="RunBtn_Click"
                     ToolTip="Sends a small, capped set of connections (about 21 operations, every one listed in the log below) and reads your recorded traffic. Changes nothing."/>
-            <TextBlock x:Name="ProgressText" Grid.Column="2" VerticalAlignment="Center" Margin="14,0,0,0" FontSize="12"
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="Sites from:" VerticalAlignment="Center" FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <ComboBox x:Name="BrowserFilterBox" Height="26" Margin="6,0,0,0" MinWidth="120"
+                          SelectionChanged="BrowserFilter_SelectionChanged"
+                          ToolTip="Whose traffic fills the picker: all apps, only your pinned sites, or the sites one of your browsers actually visits. Built from what THIS PC recorded — no built-in site list."/>
+            </StackPanel>
+            <TextBlock x:Name="ProgressText" Grid.Column="4" VerticalAlignment="Center" Margin="14,0,0,0" FontSize="12"
                        Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
         </Grid>
 
@@ -66,6 +78,10 @@
                            Foreground="{DynamicResource TextPrimaryBrush}"/>
                 <TextBlock x:Name="VerdictNextStep" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"
                            Foreground="{DynamicResource TextSecondaryBrush}"/>
+                <Button x:Name="UnblockBtn" Content="🚫 Unblock these addresses" Style="{StaticResource PrimaryButton}"
+                        FontSize="12" Padding="12,4" Margin="0,10,0,0" HorizontalAlignment="Left"
+                        Visibility="Collapsed" Click="UnblockBtn_Click"
+                        ToolTip="Removes only AutoCommand's own AC-BLOCK firewall rules for the listed addresses — fully reversible, and shown with rule counts before anything is removed."/>
             </StackPanel>
         </Border>
 

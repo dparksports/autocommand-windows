@@ -73,17 +73,65 @@ namespace AutoCommand.Services
                 : $"{FirstUtc.ToLocalTime():MM-dd HH:mm} → {LastUtc.ToLocalTime():HH:mm}";
         }
 
-        /// <summary>Hostnames worth offering in the tab's picker, busiest first.</summary>
-        public static List<string> TopHosts(List<TransmissionRecord> rows, int maxHosts = 25)
+        /// <summary>
+        /// Browser process names recognized for the tab's "sites from" filter.
+        /// Matched case-insensitively against the row's process filename with
+        /// or without .exe — any other process is "apps", never a browser.
+        /// </summary>
+        private static readonly string[] KnownBrowsers =
         {
-            return rows?
-                .Where(r => !string.IsNullOrEmpty(r.Sni))
+            "chrome", "brave", "firefox", "msedge", "edge", "opera", "vivaldi",
+            "librewolf", "waterfox", "thorium", "chromium", "iron", "avastbrowser",
+            "duckduckgo", "arc", "zen"
+        };
+
+        internal static bool IsBrowserProcess(string processDisplay)
+        {
+            if (string.IsNullOrEmpty(processDisplay)) return false;
+            string name = processDisplay.Trim().ToLowerInvariant();
+            if (name.EndsWith(".exe")) name = name[..^4];
+            return KnownBrowsers.Contains(name);
+        }
+
+        /// <summary>
+        /// Browsers with recorded conversations, busiest first — the tab's
+        /// "sites from" filter list. Every user's list is their own: it comes
+        /// from what they actually browse, never a hard-coded site roster.
+        /// </summary>
+        public static List<string> BrowsersSeen(List<TransmissionRecord> rows, int max = 8) =>
+            rows?
+                .Where(r => !string.IsNullOrEmpty(r.Sni) && IsBrowserProcess(r.ProcessDisplay))
+                .GroupBy(r => r.ProcessDisplay.Trim().ToLowerInvariant().Replace(".exe", ""))
+                .OrderByDescending(g => g.Count())
+                .Take(max)
+                .Select(g => g.Key)
+                .ToList() ?? new List<string>();
+
+        /// <summary>Hostnames worth offering in the tab's picker, busiest first.
+        /// With <paramref name="browser"/> set, only that browser's recorded
+        /// traffic counts — "the sites I actually visit in Chrome" instead of
+        /// someone else's idea of popular.</summary>
+        public static List<string> TopHosts(List<TransmissionRecord> rows, int maxHosts = 25,
+            string browser = null)
+        {
+            IEnumerable<TransmissionRecord> source = rows?
+                .Where(r => !string.IsNullOrEmpty(r.Sni)) ?? Array.Empty<TransmissionRecord>();
+            if (!string.IsNullOrEmpty(browser))
+            {
+                string want = browser.Trim().ToLowerInvariant();
+                source = source.Where(r =>
+                {
+                    string name = (r.ProcessDisplay ?? "").Trim().ToLowerInvariant();
+                    return name == want || name == want + ".exe";
+                });
+            }
+            return source
                 .GroupBy(r => r.Sni, StringComparer.OrdinalIgnoreCase)
                 .OrderByDescending(g => g.Count())
                 .ThenByDescending(g => g.Max(r => r.TsUtc))
                 .Take(maxHosts)
                 .Select(g => g.Key)
-                .ToList() ?? new List<string>();
+                .ToList();
         }
 
         /// <summary>Every host's fingerprint; the input to the machine-wide baseline.</summary>
