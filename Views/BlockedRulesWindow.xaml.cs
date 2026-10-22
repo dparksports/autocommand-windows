@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Data;
+using System.Windows.Threading;
 using AutoCommand.Services;
 
 namespace AutoCommand.Views
@@ -16,11 +17,17 @@ namespace AutoCommand.Views
     /// </summary>
     public partial class BlockedRulesWindow : Window
     {
-        private class Row
+        private class Row : INotifyPropertyChanged
         {
             public string Target, Kind, Key, Ip, AppPath, Class, Description;
-            public int Rules, EnabledRules, Hits;
+            public int Rules, EnabledRules;
             public DateTime? Created;
+            private int _hits;
+            public int Hits
+            {
+                get => _hits;
+                set { _hits = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HitsDisplay))); }
+            }
             public bool IsRisky => Class.Contains("Microsoft") || Class.Contains("Akamai") ||
                                    Class.Contains("Gcore") || Class.Contains("Windows component");
             public string RulesSummary => EnabledRules == Rules ? Rules.ToString() : $"{EnabledRules}/{Rules} on";
@@ -28,16 +35,39 @@ namespace AutoCommand.Views
             public string HitsDisplay => Hits > 0 ? Hits.ToString() : "·";
             public string OwnerDisplay { get; set; } = "";
             public string Note => Description.Length > 160 ? Description[..160] + "…" : Description;
+            public event PropertyChangedEventHandler PropertyChanged;
+        }
+
+        /// <summary>One aggregated (process, destination) rollup in the live feed grid.</summary>
+        private class HitRow
+        {
+            public string Process { get; set; }
+            public int Pid { get; set; }
+            public string Destination { get; set; }
+            public string Match { get; set; }
+            public int Attempts { get; set; }
+            public string FirstSeen { get; set; }
+            public string LastSeen { get; set; }
+            public string Image { get; set; }
         }
 
         private readonly ObservableCollection<Row> _rows = new();
+        private readonly DispatcherTimer _hitsTimer = new() { Interval = TimeSpan.FromSeconds(15) };
+        private string _migrationNote = "";
+        private string _feedStatus = "live feed starting…";
 
         public BlockedRulesWindow()
         {
             InitializeComponent();
             var view = (ListCollectionView)CollectionViewSource.GetDefaultView(_rows);
             view.GroupDescriptions.Add(new PropertyGroupDescription("Class"));
-            RulesGrid.ItemsSource = _rows;
+            RulesGrid.ItemsSource = view;
+            // live refresh of both hit surfaces (rules-grid Hits column + feed
+            // grid) — blocks fire silently, so without this the tab only ever
+            // shows the state from the moment it was opened
+            _hitsTimer.Tick += async (_, _) => await RefreshHitsAsync();
+            _hitsTimer.Start();
+            Closed += (_, _) => _hitsTimer.Stop();
             Loaded += async (_, _) =>
             {
                 // auto-migrate legacy-name rules on open — lossless (provenance
@@ -54,20 +84,19 @@ namespace AutoCommand.Views
             };
         }
 
-        private string _migrationNote = "";
-
         private async Task ReloadAsync()
         {
             StatusText.Text = "Scanning firewall…";
             var inv = await FirewallService.Instance.GetBlockedInventoryAsync();
-            var hits = await Task.Run(() => FirewallService.GetRecentBlockHits(10));
+            var hits = await Task.Run(() => CollectHitsLastHour());
 
             _rows.Clear();
             foreach (var t in inv)
             {
                 int h = 0;
                 if (t.Kind == "ip" && hits.TryGetValue(t.Ip, out int v)) h = v;
-                // app hits: log hits are per-IP, not per-app — leave as · for now
+                // app hits: the live feed attributes per process, the log per IP —
+                // the aggregated feed grid below carries the process attribution
                 string owner = "";
                 if (t.Kind == "ip")
                 {
@@ -84,13 +113,61 @@ namespace AutoCommand.Views
                 });
             }
 
+            await RefreshHitsAsync();
+        }
+
+        /// <summary>Merged per-IP hit counts, last hour: live Sysmon-joined feed +
+        /// (when enabled) the firewall's own drop log. Feed is ground truth —
+        /// it works with default settings and carries process attribution.</summary>
+        private static Dictionary<string, int> CollectHitsLastHour()
+        {
+            var merged = BlockHitFeedService.Instance.FeedHitsByIp(60);
+            foreach (var kv in FirewallService.GetRecentLogHits(60))
+                merged[kv.Key] = Math.Max(merged.TryGetValue(kv.Key, out int f) ? f : 0, kv.Value.Count);
+            return merged;
+        }
+
+        /// <summary>Refreshes both hit surfaces without rebuilding the rules grid.</summary>
+        private async Task RefreshHitsAsync()
+        {
+            try { BlockHitFeedService.Instance.Start(); } catch { }
+            var feed = BlockHitFeedService.Instance;
+            var hits = await Task.Run(() => CollectHitsLastHour());
+
+            foreach (var row in _rows)
+                if (row.Kind == "ip" && hits.TryGetValue(row.Ip, out int v))
+                    row.Hits = v;
+
+            HitsGrid.ItemsSource = feed.Aggregates(60, 200).Select(x => new HitRow
+            {
+                Process = x.Process,
+                Pid = x.Pid,
+                Destination = $"{x.DestIp}:{x.DestPort}",
+                Match = x.MatchKind == "ip" ? "IP block" : "app block",
+                Attempts = x.Count,
+                FirstSeen = x.FirstUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                LastSeen = x.LastUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                Image = x.Image,
+            }).ToList();
+
+            int liveCount = hits.Values.Sum();
+            _feedStatus = feed.IsRunning
+                ? $"live feed: {liveCount} blocked connect(s) in the last hour"
+                : "live feed starting…";
+            if (feed.WatcherError != null) _feedStatus += $" — {feed.WatcherError}";
+            UpdateStatusText();
+        }
+
+        private void UpdateStatusText()
+        {
             int risky = _rows.Count(r => r.IsRisky);
             int disabled = _rows.Count(r => r.EnabledRules == 0);
             StatusText.Text =
-                $"{_rows.Count} blocked targets · {risky} risky (Microsoft/Windows — likely breakage, not threats) · {disabled} fully disabled" +
+                _migrationNote +
+                $"{_rows.Count} blocked targets · {risky} risky (Microsoft/Windows — likely breakage, not threats) · {disabled} fully disabled · {_feedStatus}" +
                 (FirewallService.FirewallDropLoggingOn()
                     ? ""
-                    : " · drop-logging is off — click 'Enable drop-logging' to see hit counts");
+                    : " · firewall drop-logging off (optional second hit source; the live feed works without it)");
             ConsolidateBtn.IsEnabled = _rows.Any(r => r.Rules > 2 && r.Kind == "ip");
             UnblockMsBtn.IsEnabled = risky > 0;
             EnableLogBtn.Visibility = FirewallService.FirewallDropLoggingOn()

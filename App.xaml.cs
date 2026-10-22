@@ -199,6 +199,10 @@ namespace AutoCommand
             {
                 await System.Threading.Tasks.Task.Run(() =>
                 {
+                    // one-shot ever: make pfirewall.log a usable second hit source
+                    // (independent of Sysmon, so it runs before the install check)
+                    Services.FirewallService.EnsureDropLoggingOnce();
+
                     var installer = new Services.SysmonInstallerService();
                     if (installer.DetectInstallState() != Services.SysmonInstallState.Installed)
                         return; // nothing installed — the install path sizes and archives it
@@ -206,6 +210,10 @@ namespace AutoCommand
                     Services.SysmonArchiveService.Prune();
                     Services.SysmonArchiveService.Backfill();
                     Services.SysmonArchiveService.StartLiveWatch();
+                    // real-time 'who is being blocked' feed: joins Sysmon connects
+                    // against the blocked inventory; without it, blocks fire
+                    // silently at the kernel and no tab or tool ever sees them
+                    Services.BlockHitFeedService.Instance.Start();
                 });
             }
             catch (System.Exception ex)

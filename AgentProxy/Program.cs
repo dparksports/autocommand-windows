@@ -33,7 +33,10 @@ const string OfflineToolsJson = """
   { "name": "run_pid_inquiry", "description": "Full PID provenance report (needs an active session)." },
   { "name": "tail_sysmon", "description": "Recent Sysmon/Operational events (needs an active session)." },
   { "name": "trace_analyze", "description": "svchost trace capture + pattern analysis (needs an active session)." },
-  { "name": "classify_ip", "description": "Destination-range classification with block warnings (needs an active session)." }
+  { "name": "classify_ip", "description": "Destination-range classification, block-warning text and blocked-list status (needs an active session)." },
+  { "name": "list_blocks", "description": "Inventory of every AutoCommand firewall block with recent hit counts (needs an active session)." },
+  { "name": "list_recent_block_hits", "description": "Live process-attributed feed of connects hitting firewall blocks — the 'who is being blocked' view (needs an active session)." },
+  { "name": "check_host", "description": "'Why can't I reach this site?' — resolve, check blocked-list membership per address, plain-English verdict (needs an active session)." }
 ]
 """;
 

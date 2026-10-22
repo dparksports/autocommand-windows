@@ -948,10 +948,23 @@ namespace AutoCommand.Services
             });
         }
 
-        /// <summary>Recent DROP hits per IP from the firewall log (empty when logging is off).</summary>
-        public static Dictionary<string, int> GetRecentBlockHits(int minutes)
+        public sealed class FirewallLogHit
         {
-            var hits = new Dictionary<string, int>();
+            public int Count;
+            public DateTime FirstSeen, LastSeen;
+            public HashSet<string> Processes = new(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Recent DROP hits from the firewall log, per destination IP with first/last
+        /// seen and the process paths the log carries. Empty when drop-logging is off
+        /// (the default) — the process-attributed live source is BlockHitFeedService.
+        /// pfirewall.log format: date time DROP proto src sport DST dport size … info PATH
+        /// — the trailing token group starting at a "X:\\" marker is the program.
+        /// </summary>
+        public static Dictionary<string, FirewallLogHit> GetRecentLogHits(int minutes)
+        {
+            var hits = new Dictionary<string, FirewallLogHit>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 string log = Environment.SystemDirectory + @"\LogFiles\Firewall\pfirewall.log";
@@ -962,13 +975,22 @@ namespace AutoCommand.Services
                     // 2026-10-10  14:22:31  DROP  TCP  src  port  dst  port ...
                     if (!line.Contains("DROP")) continue;
                     var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length < 2) continue;
+                    if (parts.Length < 8) continue;
                     if (!DateTime.TryParse(parts[0] + " " + parts[1], out DateTime ts) || ts < cutoff) continue;
-                    foreach (var p in parts)
+                    if (!System.Net.IPAddress.TryParse(parts[6], out var dst)) continue;
+
+                    var h = hits.TryGetValue(parts[6], out var existing) ? existing
+                        : hits[parts[6]] = new FirewallLogHit { FirstSeen = ts, LastSeen = ts };
+                    h.Count++;
+                    if (ts < h.FirstSeen) h.FirstSeen = ts;
+                    if (ts > h.LastSeen) h.LastSeen = ts;
+
+                    for (int i = 8; i < parts.Length; i++)
                     {
-                        if (System.Net.IPAddress.TryParse(p, out _))
+                        if (parts[i].Length > 3 && parts[i][1] == ':' && parts[i][2] == '\\')
                         {
-                            hits[p] = hits.TryGetValue(p, out int c) ? c + 1 : 1;
+                            h.Processes.Add(string.Join(' ', parts.Skip(i)));
+                            break;
                         }
                     }
                 }
@@ -981,8 +1003,7 @@ namespace AutoCommand.Services
         {
             // INetFwPolicy2.FirewallProfile is a parameterized COM property — the
             // .NET dynamic binder cannot dispatch it (verified: RuntimeBinderException),
-            // so detection reads the registry keys netsh/wf.msc write, with a
-            // log-file-existence fallback.
+            // so detection reads the registry keys netsh/wf.msc write.
             try
             {
                 const string baseKey = @"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy";
@@ -993,8 +1014,36 @@ namespace AutoCommand.Services
                 }
             }
             catch { }
-            try { return System.IO.File.Exists(Environment.SystemDirectory + @"\LogFiles\Firewall\pfirewall.log"); }
+            // A leftover file from a past enabled period is NOT evidence logging is
+            // on — treating it as such hides the enable button while no rows accrue.
+            try
+            {
+                string log = Environment.SystemDirectory + @"\LogFiles\Firewall\pfirewall.log";
+                return System.IO.File.Exists(log) &&
+                       System.IO.File.GetLastWriteTime(log) > DateTime.Now.AddDays(-1);
+            }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// One-shot at startup: turn on "log dropped packets" so the firewall log
+        /// feed works out of the box. Runs at most once EVER — a marker file is
+        /// written either way, so a user who later disables logging is respected.
+        /// </summary>
+        public static void EnsureDropLoggingOnce()
+        {
+            try
+            {
+                string marker = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "AutoCommand", "drop-log-autoenabled.marker");
+                if (System.IO.File.Exists(marker)) return;
+                string err = FirewallDropLoggingOn() ? null : SetDropLogging(true);
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(marker));
+                System.IO.File.WriteAllText(marker,
+                    $"{DateTime.UtcNow:yyyy-MM-dd HH:mm} ensured{(err == null ? "" : $" (netsh failed: {err})")}");
+            }
+            catch { }
         }
 
         /// <summary>

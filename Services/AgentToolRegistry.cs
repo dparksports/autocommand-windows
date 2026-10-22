@@ -90,8 +90,10 @@ namespace AutoCommand.Services
 
             new Tool(
                 "classify_ip",
-                "Classify a destination IP against session-verified ranges (Microsoft/Azure, Akamai, Gcore) " +
-                "and return the same block-warning text the app shows before blocking.",
+                "Classify a destination IP against session-verified ranges (Microsoft/Azure, Akamai, Gcore), " +
+                "return the same block-warning text the app shows before blocking, AND report whether the IP " +
+                "is currently on AutoCommand's explicit blocked list (rule count, since when) — the part the " +
+                "range classifier alone cannot see.",
                 Schema(("ip", "IPv4 address to classify", true)),
                 false,
                 a => ClassifyIp(a)),
@@ -108,6 +110,42 @@ namespace AutoCommand.Services
                        ("minutes", "Look this many minutes back (default 1440 = 24h)", false)),
                 false,
                 a => GetTransmissions(a)),
+
+            new Tool(
+                "list_blocks",
+                "Inventory of every AutoCommand firewall block (the Blocks tab's data): per target — kind, " +
+                "owner class, enabled/total rules, created time and recent hit counts from the live " +
+                "Sysmon-joined feed. This is the authoritative 'is it blocked' source: classify_ip's range " +
+                "answer alone cannot see explicit blocked-list entries.",
+                Schema(("minutes", "Hit-count lookback window in minutes (default 60)", false)),
+                false,
+                a => ListBlocks(a)),
+
+            new Tool(
+                "list_recent_block_hits",
+                "Processes recently caught hitting AutoCommand firewall blocks, LIVE: Sysmon EID 3 connect " +
+                "attempts joined against the blocked-target inventory — process, pid, blocked destination, " +
+                "first/last seen, attempt count. Windows Firewall blocks silently (connect fails with " +
+                "access-denied, nothing is logged by default), so this join — not pfirewall.log — is the " +
+                "real-time 'who is being blocked' feed, and the fastest way to explain a " +
+                "'This site can't be reached' error.",
+                Schema(("minutes", "Look-back window (default 60, cap 1440)", false),
+                       ("contains", "Only rows whose process or destination contains this text (case-insensitive)", false),
+                       ("max", "Maximum aggregated rows (default 50, cap 200)", false)),
+                false,
+                a => ListRecentBlockHits(a)),
+
+            new Tool(
+                "check_host",
+                "'Why can't I reach this site?' in one call: resolve a hostname, then per address — range " +
+                "classification, whether it is on AutoCommand's blocked list (with rule count and since " +
+                "when), and recent blocked-connect attempts against it — ending in a plain-English verdict. " +
+                "Accounts for DNS rotation: blocks are per-IP, so a blocked front-end can make a site fail " +
+                "intermittently while other Google/Microsoft/CDN pages still work.",
+                Schema(("host", "Hostname to check (e.g. accounts.google.com)", true),
+                       ("minutes", "Recent-hit lookback (default 120)", false)),
+                false,
+                a => CheckHost(a)),
 
             new Tool(
                 "diagnose_site",
@@ -496,12 +534,191 @@ namespace AutoCommand.Services
         private static string ClassifyIp(JsonObject a)
         {
             string ip = a["ip"]?.GetValue<string>() ?? "";
-            return ToJson(new JsonObject
+            EnsureFeedStarted();
+            var blocked = BlockHitFeedService.Instance.BlockedIp(ip);
+            var o = new JsonObject
             {
                 ["ip"] = ip,
                 ["classification"] = IpClassifier.Classify(ip),
                 ["microsoft_infra"] = IpClassifier.IsMicrosoftInfra(ip),
                 ["block_warning"] = IpClassifier.WarningText(ip),
+                ["blocked"] = blocked != null,
+            };
+            if (blocked != null)
+            {
+                o["blocked_rules"] = $"{blocked.EnabledRules}/{blocked.Rules} enabled";
+                o["blocked_class"] = blocked.Class;
+                o["blocked_since"] = blocked.Created?.ToString("yyyy-MM-dd HH:mm") ?? "unknown (legacy rule)";
+                o["note"] = "On AutoCommand's blocked list — the AC-BLOCK firewall rules drop connects " +
+                            "silently at the kernel (instant access-denied). See list_recent_block_hits " +
+                            "for which processes are hitting it and check_host for the site-level picture.";
+            }
+            return ToJson(o);
+        }
+
+        /// <summary>Start() is idempotent — every blocked-list reader ensures the feed lives.</summary>
+        private static void EnsureFeedStarted()
+        {
+            try { BlockHitFeedService.Instance.Start(); } catch { }
+        }
+
+        private static string ListBlocks(JsonObject a)
+        {
+            int minutes = Math.Clamp(a["minutes"]?.GetValue<int>() ?? 60, 1, 24 * 60);
+            EnsureFeedStarted();
+            var inv = FirewallService.Instance.GetBlockedInventoryAsync().GetAwaiter().GetResult();
+            var feedHits = BlockHitFeedService.Instance.FeedHitsByIp(minutes);
+
+            var arr = new JsonArray();
+            foreach (var t in inv)
+            {
+                int h = t.Kind == "ip" && feedHits.TryGetValue(t.Ip, out int c) ? c : 0;
+                arr.Add(new JsonObject
+                {
+                    ["target"] = t.Target,
+                    ["kind"] = t.Kind,
+                    ["class"] = t.Class,
+                    ["rules"] = $"{t.EnabledRules}/{t.Rules} enabled",
+                    ["created"] = t.Created?.ToString("yyyy-MM-dd HH:mm") ?? "legacy",
+                    [$"hits_{minutes}m"] = h,
+                    ["note"] = string.IsNullOrEmpty(t.Description) ? "" :
+                        (t.Description.Length > 160 ? t.Description[..160] + "…" : t.Description),
+                });
+            }
+            var feed = BlockHitFeedService.Instance;
+            return ToJson(new JsonObject
+            {
+                ["type"] = "blocked_inventory",
+                ["targets"] = arr.Count,
+                ["rows"] = arr,
+                ["feed_inventory_refreshed_utc"] = feed.LastRefreshUtc == default ? null : feed.LastRefreshUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+            });
+        }
+
+        private static string ListRecentBlockHits(JsonObject a)
+        {
+            int minutes = Math.Clamp(a["minutes"]?.GetValue<int>() ?? 60, 1, 1440);
+            int max = Math.Clamp(a["max"]?.GetValue<int>() ?? 50, 1, 200);
+            string contains = a["contains"]?.GetValue<string>();
+            EnsureFeedStarted();
+            var feed = BlockHitFeedService.Instance;
+
+            var aggs = feed.Aggregates(minutes, 200);
+            if (!string.IsNullOrEmpty(contains))
+                aggs = aggs.Where(x =>
+                    (x.Process?.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (x.Image?.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    (x.DestIp?.IndexOf(contains, StringComparison.OrdinalIgnoreCase) >= 0)).ToList();
+
+            if (aggs.Count == 0)
+                return $"No blocked-connect hits in the last {minutes} min. The feed joins live Sysmon EID 3 " +
+                       "attempts against the blocked inventory — it needs Sysmon installed and sees attempts " +
+                       "from service start onward (history persists across restarts). " +
+                       (feed.WatcherError != null ? $"Feed note: {feed.WatcherError}" :
+                        "If you are chasing a 'site can't be reached' error, also try check_host.");
+
+            var arr = new JsonArray();
+            foreach (var x in aggs.Take(max))
+            {
+                arr.Add(new JsonObject
+                {
+                    ["ts_last_utc"] = x.LastUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+                    ["process"] = x.Process,
+                    ["pid"] = x.Pid,
+                    ["image"] = x.Image,
+                    ["destination"] = $"{x.DestIp}:{x.DestPort}",
+                    ["blocked_kind"] = x.MatchKind,   // ip = destination IP block, app = process block
+                    ["attempts"] = x.Count,
+                    ["first_utc"] = x.FirstUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+                });
+            }
+            return ToJson(new JsonObject
+            {
+                ["type"] = "block_hits",
+                ["window_minutes"] = minutes,
+                ["rows"] = arr,
+                ["row_count"] = arr.Count,
+                ["inventory_refreshed_utc"] = feed.LastRefreshUtc == default ? null : feed.LastRefreshUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+            });
+        }
+
+        /// <summary>
+        /// Site-level blocked triage: resolve → per-IP verdict → plain English.
+        /// The error users actually see ("This site can't be reached") is Chrome's
+        /// rendering of an instantly-denied connect — so the verdict keys off
+        /// blocked-list membership, not range classification.
+        /// </summary>
+        private static string CheckHost(JsonObject a)
+        {
+            string host = a["host"]?.GetValue<string>() ?? "";
+            int minutes = Math.Clamp(a["minutes"]?.GetValue<int>() ?? 120, 1, 1440);
+            if (string.IsNullOrWhiteSpace(host))
+                return "check_host: 'host' is required.";
+            host = host.Trim();
+            try { if (host.Contains("://")) host = new Uri(host).Host; }   // tolerate pasted URLs
+            catch { /* not URL-shaped — treat as a bare hostname */ }
+
+            EnsureFeedStarted();
+            var feed = BlockHitFeedService.Instance;
+
+            System.Net.IPAddress[] addrs;
+            try { addrs = System.Net.Dns.GetHostAddresses(host); }
+            catch (Exception ex)
+            {
+                return ToJson(new JsonObject
+                {
+                    ["host"] = host,
+                    ["verdict"] = $"DNS resolution failed ({ex.Message}) — the hostname itself is unreachable " +
+                                  "before any firewall decision. Not an AutoCommand block.",
+                });
+            }
+
+            var recent = feed.Recent(minutes, 2000)
+                .Where(h => h.MatchKind == "ip")
+                .GroupBy(h => h.DestIp)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var rows = new JsonArray();
+            var blockedAddrs = new List<string>();
+            foreach (var addr in addrs)
+            {
+                string ip = addr.ToString();
+                var b = feed.BlockedIp(ip);
+                recent.TryGetValue(ip, out int hits);
+                if (b != null) blockedAddrs.Add(ip);
+                rows.Add(new JsonObject
+                {
+                    ["ip"] = ip,
+                    ["classification"] = IpClassifier.Classify(ip),
+                    ["blocked"] = b != null,
+                    ["blocked_since"] = b?.Created?.ToString("yyyy-MM-dd HH:mm"),
+                    [$"blocked_attempts_{minutes}m"] = hits,
+                });
+            }
+
+            string verdict;
+            if (blockedAddrs.Count > 0)
+                verdict = $"{host} resolves to {addrs.Length} address(es); {blockedAddrs.Count} are on " +
+                          "AutoCommand's blocked list. Connects to those fail INSTANTLY with access-denied " +
+                          "(kernel-level firewall block), which browsers show as 'This site can't be reached'. " +
+                          "Because blocks are per-IP and this host rotates addresses, the site may work from " +
+                          "other networks or fail intermittently. Unblock via unblock_ip or the Blocks tab.";
+            else if (rows.Any(r => ((JsonNode)r!["blocked_attempts_" + minutes + "m"]).GetValue<int>() > 0))
+                verdict = "No currently-resolved address is blocked, but blocked-connect attempts were seen " +
+                          "recently — DNS rotation likely served a blocked address earlier. List the feed with " +
+                          "list_recent_block_hits and intersect with this host's address pool.";
+            else
+                verdict = $"No AutoCommand block matches any of {host}'s {addrs.Length} resolved address(es) " +
+                          $"and no blocked-connect attempts were seen in the last {minutes} min — if the site " +
+                          "still fails, the cause is upstream (network, DNS filtering on the router, or the " +
+                          "remote end), not a local block rule.";
+
+            return ToJson(new JsonObject
+            {
+                ["type"] = "check_host",
+                ["host"] = host,
+                ["rows"] = rows,
+                ["verdict"] = verdict,
             });
         }
 

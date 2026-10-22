@@ -45,3 +45,32 @@ blocked" verdict during the original diagnosis.
 `SiteDoctorSelfTest\` — all pass (one loud SKIP by design on machines
 whose schannel cannot host TLS). Full subsystem write-up in
 `docs/TECHNICAL_NOTES.md` → *Why is this site slow?*
+
+## New: 🔴 Who is being blocked, live (Blocks tab + AI tools)
+
+Blocks fire **silently**: Windows Firewall vetoes the connect at the
+kernel (instant access-denied) and emits nothing the app can subscribe
+to. Until now the Blocks tab's hit counts came from `pfirewall.log` —
+which Windows ships **off by default** and which carries IPs but no
+processes — so a block breaking someone's browsing (the
+`accounts.google.com` case: "This site can't be reached" while every
+other Google page worked) was invisible exactly when users needed it.
+
+- **Live feed with process attribution**: every Sysmon EID 3 connect
+  attempt is joined against the blocked-target inventory (30s refresh)
+  — process, PID, blocked destination, attempts, first/last seen — in
+  a new "Recently blocked connects" grid that self-refreshes every 15s.
+  Works out of the box, no firewall-log configuration needed; history
+  persists across restarts (24h ring, JSONL beside the archive).
+- **classify_ip now answers the real question**: range classification
+  *and* whether the IP is on the explicit blocked list — rule count,
+  since when — the part the range classifier alone could never see.
+- **New AI-bridge tools**: `list_recent_block_hits` (the live feed),
+  `list_blocks` (inventory + hit counts), and `check_host` — the
+  one-call "why can't I reach this site?" triage that resolves the
+  hostname, checks every address against the blocked list, and explains
+  the DNS-rotation intermittency that makes per-IP blocks feel random.
+- **pfirewall.log demoted to honest second source**: richer parsing
+  (first/last seen + process paths), auto-enabled once at startup
+  (never re-enabled if you turn it off), and the stale-leftover-file
+  false-positive that could hide the enable button is fixed.
