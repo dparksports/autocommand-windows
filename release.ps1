@@ -163,7 +163,16 @@ git push origin "v$Version"
 Assert-Exit 'git push tag'
 
 Step "Creating GitHub release"
-gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md" $appZip $unblockPs1 $sumsFile
-Assert-Exit 'gh release create'
+# Assets go up ONE PER gh CALL, not as one create-with-assets call: gh
+# uploads in parallel and its own retry after a transient socket error
+# races itself into HTTP 422 "ReleaseAsset.name already exists" (seen on
+# two consecutive releases), then rolls back the whole release. Serial
+# create-then-upload with --clobber cannot race itself.
+gh release create "v$Version" --title "v$Version" --notes-file "release_notes_v$Version.md"
+Assert-Exit 'gh release create (release shell)'
+gh release upload "v$Version" $appZip --clobber
+Assert-Exit 'gh release upload (app zip)'
+gh release upload "v$Version" $unblockPs1 $sumsFile --clobber
+Assert-Exit 'gh release upload (unblock script + sums)'
 
 Step "Released v${Version}: https://github.com/dparksports/autocommand-windows/releases/tag/v${Version}"
