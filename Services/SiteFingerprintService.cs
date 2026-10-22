@@ -6,7 +6,7 @@ using AutoCommand.Models;
 namespace AutoCommand.Services
 {
     /// <summary>
-    /// Passive evidence engine behind "Why is this site slow?": groups the
+    /// Passive evidence engine behind the Site Doctor tab: groups the
     /// Transmissions archive by SNI hostname and reads the behavioral
     /// fingerprint out of what is already on disk — no packets sent, nothing
     /// guessed. Three signals, each one observed in the wild while diagnosing

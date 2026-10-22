@@ -11,10 +11,12 @@ using AutoCommand.Services;
 namespace AutoCommand.Views
 {
     /// <summary>
-    /// "Why is this site slow?" — the user-facing end of the site-diagnosis
-    /// pipeline: SiteFingerprintService (what recorded traffic says) +
-    /// SiteProbeService (a capped, itemized live check) + SiteVerdictService
-    /// (one plain-English answer, with the math one expander away).
+    /// "Site Doctor" — the user-facing end of the site-diagnosis pipeline:
+    /// SiteFingerprintService (what recorded traffic says) +
+    /// DependencyBlockService (were the page's other hosts silently blocked
+    /// during this browser's visits?) + SiteProbeService (a capped, itemized
+    /// live check) + SiteVerdictService (one plain-English answer, with the
+    /// math one expander away).
     ///
     /// House rules, same as every tab: looking changes nothing; the check's
     /// every operation is listed; suggestions are reversible and never
@@ -102,8 +104,44 @@ namespace AutoCommand.Views
                 {
                     StruggleHint.Visibility = Visibility.Collapsed;
                 }
+
+                RefreshBlockHitHint();
             }
             catch { /* archive unreadable — the box just has no suggestions */ }
+        }
+
+        /// <summary>
+        /// The signpost for users who don't know this tab is for them: a
+        /// browser hitting blocked addresses is the fingerprint of "the site
+        /// works but sign-in / parts of pages fail". One glance, data-driven
+        /// (the browsers are the ones your traffic shows), no block named
+        /// until a check anchors it to a site.
+        /// </summary>
+        private void RefreshBlockHitHint()
+        {
+            try
+            {
+                BlockHitFeedService.Instance.Start();
+                var byBrowser = BlockHitFeedService.Instance.Aggregates(1440, 100)
+                    .Where(a => a.MatchKind == "ip" && _browsers.Contains(
+                        ((System.IO.Path.GetFileName(a.Image) ?? a.Process ?? "")
+                            .Trim().ToLowerInvariant().Replace(".exe", ""))))
+                    .GroupBy(a => a.Process, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (byBrowser.Count == 0)
+                {
+                    BlockHitHint.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
+                var busiest = byBrowser.OrderByDescending(g => g.Sum(a => a.Count)).First();
+                int total = busiest.Sum(a => a.Count);
+                BlockHitHintText.Text =
+                    $"{busiest.Key} hit blocked addresses {total} time(s) in the last day — if a page or " +
+                    "sign-in failed, that's usually why. Check the site:";
+                BlockHitHint.Visibility = Visibility.Visible;
+            }
+            catch { /* no feed → no hint; the tab works regardless */ }
         }
 
         private void BrowserFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -221,12 +259,20 @@ namespace AutoCommand.Views
                 // probes cover servers DNS may not hand back right now.
                 var extraEdges = fingerprint.Edges.Select(e => e.Ip).ToList();
 
+                // Dependency pass, in parallel with the probe: were any of
+                // the page's other hosts silently blocked during this
+                // browser's recorded visits? (The probe can't see this —
+                // blocked connects carry no hostname.)
+                var depTask = Task.Run(() =>
+                    DependencyBlockService.AnalyzeLiveAsync(host, 1440, null, ct), ct);
+
                 var progress = new Progress<string>(line => ProgressText.Text = line);
                 var report = await Task.Run(() =>
                     SiteProbeService.Shared.RunAsync(host, extraEdges, controls, progress, ct), ct);
 
-                var verdict = SiteVerdictService.Decide(fingerprint, report);
-                MarkAutoCommandBlocked(verdict, report);
+                var dependency = await depTask;
+                var verdict = SiteVerdictService.Decide(fingerprint, report, dependency);
+                MarkAutoCommandBlocked(verdict, report, dependency);
                 ShowVerdict(verdict, report);
                 ProgressText.Text =
                     $"Done in {(report.EndedUtc - report.StartedUtc).TotalSeconds:0}s · {report.Operations.Count} operations, all listed below.";
@@ -258,6 +304,8 @@ namespace AutoCommand.Views
             {
                 SiteVerdictService.VerdictKind.Blocked =>
                     (Hex("#3A1414"), Hex("#E5534B"), Hex("#FF8A80")),
+                SiteVerdictService.VerdictKind.DependencyBlocked =>
+                    (Hex("#3A1414"), Hex("#E5534B"), Hex("#FF8A80")),
                 SiteVerdictService.VerdictKind.LocalTlsBroken =>
                     (Hex("#3A1414"), Hex("#E5534B"), Hex("#FF8A80")),
                 SiteVerdictService.VerdictKind.HandshakeDropping =>
@@ -283,30 +331,44 @@ namespace AutoCommand.Views
         }
 
         /// <summary>
-        /// Crosses the probe's failed addresses against AutoCommand's own
-        /// blocked list (the BlockHitFeedService inventory cache). When a
-        /// failed edge IS blocked here, the evidence line says so and a
-        /// one-click unblock appears — "go hunt for it in the firewall" is
-        /// exactly the runaround this replaces.
+        /// Crosses the probe's failed addresses AND the dependency pass's
+        /// in-window block hits against AutoCommand's own blocked list (the
+        /// BlockHitFeedService inventory cache). When something is blocked
+        /// here, the evidence line says so and a one-click unblock appears —
+        /// "go hunt for it in the firewall" is exactly the runaround this
+        /// replaces. Two flavors: the site's own addresses failing TCP, and
+        /// the login-failure shape where the site is fine but an address the
+        /// page depends on was silently blocked mid-visit.
         /// </summary>
         private void MarkAutoCommandBlocked(SiteVerdictService.Verdict verdict,
-            SiteProbeService.SiteProbeReport report)
+            SiteProbeService.SiteProbeReport report,
+            DependencyBlockService.Report dependency)
         {
             try
             {
                 BlockHitFeedService.Instance.Start();   // idempotent; populates the cache
-                var failedIps = report.Edges
+                bool IsBlocked(string ip) =>
+                    BlockHitFeedService.Instance.BlockedIp(ip) != null;
+
+                var direct = report.Edges
                     .Where(e => e.TcpConnectMs == null)
                     .Select(e => e.Ip)
                     .Where(ip => !string.IsNullOrEmpty(ip))
                     .Distinct()
+                    .Where(IsBlocked)
                     .ToList();
-                _unblockTargets = failedIps
-                    .Where(ip => BlockHitFeedService.Instance.BlockedIp(ip) != null)
+                var deps = (dependency?.InWindow ?? new List<DependencyBlockService.Hit>())
+                    .Select(h => h.Ip)
+                    .Where(ip => !string.IsNullOrEmpty(ip))
+                    .Distinct(System.StringComparer.OrdinalIgnoreCase)
+                    .Where(IsBlocked)
+                    .ToList();
+                _unblockTargets = direct
+                    .Union(deps, System.StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 if (_unblockTargets.Count == 0) { _unblockTargets = null; return; }
 
-                var blockedSet = _unblockTargets.ToHashSet(System.StringComparer.OrdinalIgnoreCase);
+                var blockedSet = direct.ToHashSet(System.StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < verdict.Evidence.Count; i++)
                 {
                     string line = verdict.Evidence[i];
@@ -320,11 +382,15 @@ namespace AutoCommand.Views
                     }
                 }
 
-                verdict.NextStep =
-                    $"{_unblockTargets.Count} of this site's addresses are on AutoCommand's block list — " +
-                    "unblock them right here with the button below, then re-run the check. " +
-                    verdict.NextStep;
-                UnblockBtn.Content = $"🚫 Unblock {_unblockTargets.Count} blocked address(es) for this site";
+                if (direct.Count > 0)
+                    verdict.NextStep =
+                        $"{direct.Count} of this site's addresses are on AutoCommand's block list — " +
+                        "unblock them right here with the button below, then re-run the check. " +
+                        verdict.NextStep;
+
+                UnblockBtn.Content = deps.Count > 0 && direct.Count == 0
+                    ? $"🚫 Unblock {deps.Count} address(es) this page depends on"
+                    : $"🚫 Unblock {_unblockTargets.Count} blocked address(es) for this site";
                 UnblockBtn.Visibility = Visibility.Visible;
             }
             catch { /* the verdict stands on its own if the lookup fails */ }

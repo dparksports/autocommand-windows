@@ -14,7 +14,7 @@ using System.Threading.Tasks;
 namespace AutoCommand.Services
 {
     /// <summary>
-    /// Active probe engine behind "Why is this site slow?". Sends a small,
+    /// Active probe engine behind the Site Doctor tab. Sends a small,
     /// itemized, strictly capped set of connections — every single one is
     /// recorded in the report's Operations log, because "what did you send
     /// and what came back" is the whole point of the tab. Nothing here

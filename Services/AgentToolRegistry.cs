@@ -149,11 +149,14 @@ namespace AutoCommand.Services
 
             new Tool(
                 "diagnose_site",
-                "Run the 'Why is this site slow?' pipeline for one hostname: passive fingerprint from the " +
-                "recorded-transmissions archive (edge dispersion, retry bursts), then a capped live probe run " +
-                "(~10-25 quick operations, every one listed in the result) — DNS rotation sampling, per-edge TCP " +
-                "plus two TLS hello shapes, control-host comparison — and the plain-English verdict with evidence. " +
-                "Read-only; nothing is blocked, killed or changed. Takes roughly 30 seconds.",
+                "Run the Site Doctor pipeline for one hostname — the 'why is this site slow / broken / failing " +
+                "to sign in' question: passive fingerprint from the recorded-transmissions archive, a " +
+                "dependency-block pass (were the page's other hosts — captcha, assets, APIs — silently blocked " +
+                "during this browser's recorded visits? blocked connects carry no hostname, so only the " +
+                "block-hit join can see them), then a capped live probe run (~10-25 quick operations, every one " +
+                "listed in the result) — DNS rotation sampling, per-edge TCP plus two TLS hello shapes, " +
+                "control-host comparison — and the plain-English verdict with evidence. Read-only; nothing is " +
+                "blocked, killed or changed. Takes roughly 30 seconds.",
                 Schema(("host", "Hostname to diagnose (e.g. chat.z.ai)", true),
                        ("minutes", "Archive lookback window in minutes (default 1440)", false)),
                 false,
@@ -801,7 +804,20 @@ namespace AutoCommand.Services
             }
             catch (ArgumentException ex) { return ex.Message; }
 
-            var verdict = SiteVerdictService.Decide(fingerprint, report);
+            // Dependency pass — same engine as the tab: were any of the
+            // page's other hosts silently blocked during this browser's
+            // recorded visits? Blocked connects carry no hostname, so only
+            // this join can see them. Degrades to null, never throws.
+            DependencyBlockService.Report dep = null;
+            try
+            {
+                BlockHitFeedService.Instance.Start();
+                dep = DependencyBlockService.AnalyzeLiveAsync(host, minutes, null, System.Threading.CancellationToken.None)
+                    .GetAwaiter().GetResult();
+            }
+            catch { dep = null; }
+
+            var verdict = SiteVerdictService.Decide(fingerprint, report, dep);
 
             var edgeArr = new JsonArray();
             foreach (var e in report.Edges)
@@ -841,7 +857,7 @@ namespace AutoCommand.Services
             var ipArr = new JsonArray();
             foreach (var ip in report.Dns.DistinctIps) ipArr.Add(ip);
 
-            return ToJson(new JsonObject
+            var root = new JsonObject
             {
                 ["type"] = "site_diagnosis",
                 ["host"] = host,
@@ -869,7 +885,45 @@ namespace AutoCommand.Services
                     ["controls"] = controlArr,
                 },
                 ["operations"] = opsArr,
-            });
+            };
+
+            if (dep != null && (dep.InWindow.Count > 0 || dep.Nearby.Count > 0 || dep.Rotations.Count > 0))
+            {
+                var depArr = new JsonArray();
+                foreach (var h in dep.InWindow.Concat(dep.Nearby))
+                {
+                    var served = new JsonArray();
+                    foreach (var sh in h.ServedHosts) served.Add(sh);
+                    depArr.Add(new JsonObject
+                    {
+                        ["ip"] = h.Ip,
+                        ["process"] = h.Process,
+                        ["attempts"] = h.Attempts,
+                        ["first_utc"] = h.FirstUtc,
+                        ["last_utc"] = h.LastUtc,
+                        ["in_visit_window"] = dep.InWindow.Contains(h),
+                        ["served_hosts"] = served,
+                        ["blocked_since"] = h.BlockedSince,
+                        ["block_class"] = h.BlockClass,
+                    });
+                }
+                var rotArr = new JsonArray();
+                foreach (var f in dep.Rotations)
+                    rotArr.Add(new JsonObject
+                    {
+                        ["host"] = f.Host,
+                        ["blocked_addresses"] = f.BlockedAddresses,
+                        ["total_addresses"] = f.TotalAddresses,
+                    });
+                root["dependency_blocks"] = new JsonObject
+                {
+                    ["hits"] = depArr,
+                    ["rotation"] = rotArr,
+                    ["visit_times_utc"] = dep.VisitTimesUtc.Count,
+                };
+            }
+
+            return ToJson(root);
         }
 
         // ── mutating handlers (already user-confirmed when reached) ───────

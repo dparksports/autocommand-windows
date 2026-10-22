@@ -15,32 +15,39 @@
 
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="Why is this site slow?" Style="{StaticResource PageHeader}"/>
-            <TextBlock Text="A 60-second check that measures, compares and explains — it never changes anything on your PC"
+            <TextBlock Text="Site Doctor" Style="{StaticResource PageHeader}"/>
+            <TextBlock Text="Slow, failing, or can't sign in — one 60-second check that measures, compares and explains. It never changes anything on your PC"
                        Foreground="{DynamicResource TextSecondaryBrush}" FontSize="12" Margin="0,-12,0,0"/>
         </StackPanel>
 
-        <!-- Struggling hint (from recorded traffic, refreshed on load) -->
-        <Border x:Name="StruggleHint" Grid.Row="1" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4"
-                Padding="12,8" Margin="0,0,0,12" Visibility="Collapsed">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="StruggleHintText" VerticalAlignment="Center" FontSize="12"
-                           Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap"/>
-                <ItemsControl x:Name="StruggleHintHosts" Margin="12,0,0,0" ItemsSource="{Binding}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal"/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Button Content="{Binding}" Style="{StaticResource PrimaryButton}" FontSize="11"
-                                    Padding="8,2" Margin="0,0,8,0" Click="StruggleHost_Click"/>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
-        </Border>
+        <!-- Hints (from recorded traffic + block feed, refreshed on load) -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,12">
+            <Border x:Name="StruggleHint" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4"
+                    Padding="12,8" Margin="0,0,0,6" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="StruggleHintText" VerticalAlignment="Center" FontSize="12"
+                               Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap"/>
+                    <ItemsControl x:Name="StruggleHintHosts" Margin="12,0,0,0" ItemsSource="{Binding}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Content="{Binding}" Style="{StaticResource PrimaryButton}" FontSize="11"
+                                        Padding="8,2" Margin="0,0,8,0" Click="StruggleHost_Click"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+            <Border x:Name="BlockHitHint" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="4"
+                    Padding="12,8" Visibility="Collapsed">
+                <TextBlock x:Name="BlockHitHintText" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextPrimaryBrush}"/>
+            </Border>
+        </StackPanel>
 
         <!-- Input row -->
         <Grid Grid.Row="2" Margin="0,0,0,12">

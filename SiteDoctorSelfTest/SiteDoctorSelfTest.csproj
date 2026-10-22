@@ -24,6 +24,9 @@
     <Compile Include="..\Services\SiteFingerprintService.cs" />
     <Compile Include="..\Services\SiteProbeService.cs" />
     <Compile Include="..\Services\SiteVerdictService.cs" />
+    <!-- The pure core only — the live half (DependencyBlockService.Live.cs)
+         drags the feed/archive services and is exercised by the app itself. -->
+    <Compile Include="..\Services\DependencyBlockService.cs" />
   </ItemGroup>
 
 </Project>

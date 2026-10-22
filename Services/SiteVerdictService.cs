@@ -21,6 +21,7 @@ namespace AutoCommand.Services
         public enum VerdictKind
         {
             Blocked,             // nothing reaches the site from this PC
+            DependencyBlocked,   // the site answers fine — a host the page depends on is on OUR block list
             LocalTlsBroken,      // every handshake fails, controls included — the PC's stack
             HandshakeDropping,   // servers accept TCP but drop some TLS hellos
             Steering,            // short-TTL DNS roulette across uneven servers
@@ -41,12 +42,13 @@ namespace AutoCommand.Services
         }
 
         /// <summary>
-        /// Decide from whatever evidence exists. Either input may be null
+        /// Decide from whatever evidence exists. Any input may be null
         /// (passive-only or probe-only runs degrade, never guess).
         /// </summary>
         public static Verdict Decide(
             SiteFingerprintService.SiteFingerprint fingerprint,
-            SiteProbeService.SiteProbeReport report)
+            SiteProbeService.SiteProbeReport report,
+            DependencyBlockService.Report dependency = null)
         {
             var evidence = new List<string>();
 
@@ -57,16 +59,26 @@ namespace AutoCommand.Services
             if (report != null)
                 evidence.AddRange(ExtractProbeEvidence(report));
 
+            if (dependency != null)
+                evidence.AddRange(DependencyEvidence(dependency));
+
             Verdict verdict = null;
 
             if (report != null)
             {
                 verdict ??= RuleBlocked(report);
                 verdict ??= RuleLocalTlsBroken(report);
+                verdict ??= RuleDependencyBlocked(dependency, report);
                 verdict ??= RuleHandshakeDropping(report);
                 verdict ??= RuleSteering(report, fingerprint);
                 verdict ??= RuleFarAway(report);
                 verdict ??= RuleHealthy(report, fingerprint);
+            }
+            else if (dependency?.Any == true)
+            {
+                // No probe (or it failed to run) — the block-hit join stands
+                // on its own recorded evidence.
+                verdict = RuleDependencyBlocked(dependency, null);
             }
 
             if (verdict == null)
@@ -101,6 +113,77 @@ namespace AutoCommand.Services
         }
 
         // ── rules, in priority order ─────────────────────────────────────
+
+        private static Verdict RuleDependencyBlocked(
+            DependencyBlockService.Report dep,
+            SiteProbeService.SiteProbeReport r)
+        {
+            // The login-failure shape observed in the wild: the site's own
+            // servers answer fine, but during the page load the browser's
+            // connects to an address the page NEEDS (captcha, assets, APIs)
+            // were silently dropped by this machine's own block rules. A
+            // local, fixable cause outranks the remote-cause rules below —
+            // and it fires only on hits INSIDE a recorded visit window, so
+            // it never blames an unrelated block.
+            if (dep?.Any != true) return null;
+
+            string host = dep.Host ?? r?.Host ?? "this site";
+            var top = dep.InWindow[0];
+            int attempts = dep.InWindow.Sum(h => h.Attempts);
+            string attemptWord = attempts == 1 ? "connection attempt" : "connection attempts";
+            int addresses = dep.InWindow.Count;
+            string addrDetail = addresses == 1
+                ? $"{top.Ip} — an address this page depends on"
+                : $"{addresses} addresses this page depends on ({string.Join(", ", dep.InWindow.Select(h => h.Ip).Take(3))})";
+            string when = dep.VisitTimesUtc.Count > 0
+                ? dep.VisitTimesUtc.Max().ToLocalTime().ToString("HH:mm")
+                : "your visit";
+            string served = top.ServedHosts.Count > 0
+                ? $" — recorded traffic shows it also serving {string.Join(", ", top.ServedHosts.Take(2))}"
+                : "";
+            string siteFine = r != null && r.Edges.Count > 0
+                ? $"{host}'s own servers answer fine — but "
+                : "";
+
+            return new Verdict
+            {
+                Kind = VerdictKind.DependencyBlocked,
+                Headline =
+                    $"{siteFine}at {when}, {top.Process} made {attempts} blocked {attemptWord} toward " +
+                    $"{addrDetail}{served}. AutoCommand's own firewall rules dropped them silently — " +
+                    "when a page's dependency is blocked, the page fails oddly (sign-ins show generic errors) " +
+                    "while the site itself keeps working.",
+                NextStep =
+                    "Unblock with the button below, then retry what failed — only AutoCommand's own rules are " +
+                    "removed, fully reversible from the Blocks tab. If a rule was there for a reason, re-block " +
+                    "it there and the diagnosis stands as the explanation."
+            };
+        }
+
+        /// <summary>Evidence lines from the dependency pass — shown under
+        /// "the math" no matter which rule fires.</summary>
+        private static List<string> DependencyEvidence(DependencyBlockService.Report dep)
+        {
+            var lines = new List<string>();
+            foreach (var h in dep.InWindow)
+            {
+                string served = h.ServedHosts.Count > 0
+                    ? $" · served here: {string.Join(", ", h.ServedHosts.Take(2))}"
+                    : "";
+                string since = h.BlockedSince.HasValue
+                    ? $" · blocked since {h.BlockedSince.Value.ToLocalTime():yyyy-MM-dd HH:mm}"
+                    : "";
+                lines.Add($"{h.FirstUtc.ToLocalTime():HH:mm:ss}–{h.LastUtc.ToLocalTime():HH:mm:ss}  " +
+                          $"{h.Process} → {h.Ip}  {h.Attempts} attempt(s) blocked{served}{since}");
+            }
+            foreach (var f in dep.Rotations)
+                lines.Add($"{f.Host} currently resolves to {f.TotalAddresses} addresses; " +
+                          $"{f.BlockedAddresses} of them are blocked here — that rotation is why it comes and goes.");
+            if (dep.InWindow.Count == 0 && dep.Nearby.Count > 0)
+                lines.Add($"{dep.Nearby.Sum(h => h.Attempts)} blocked connect(s) from this site's browsers " +
+                          "today, none inside a recorded page load — context, not cause.");
+            return lines;
+        }
 
         private static Verdict RuleBlocked(SiteProbeService.SiteProbeReport r)
         {

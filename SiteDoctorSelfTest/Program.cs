@@ -1,10 +1,12 @@
-// Site doctor self-test — the "Why is this site slow?" pipeline, proven at
-// the source. Offline: fingerprint signals (edge dispersion, 5-second
-// bursts, single-edge churn) over synthetic archive records, and every
-// verdict rule over synthetic probe reports. Live (loopback only, no admin,
-// no external network): a TLS server that answers handshakes and a "black
-// hole" that accepts TCP then never replies — the failure shape observed in
-// the wild, asserted detectable end-to-end by the dual-hello probe.
+// Site doctor self-test — the Site Doctor pipeline ("why is this site slow
+// / broken / can't sign in"), proven at the source. Offline: fingerprint
+// signals (edge dispersion, 5-second bursts, single-edge churn) over
+// synthetic archive records, every verdict rule over synthetic probe
+// reports, and the dependency-block join over the login-failure shape
+// observed in the wild. Live (loopback only, no admin, no external
+// network): a TLS server that answers handshakes and a "black hole" that
+// accepts TCP then never replies — the failure shape the dual-hello probe
+// exists to detect, asserted end-to-end.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -31,6 +33,11 @@ static TransmissionRecord Rec(string sni, string ip, DateTime ts, long bytes = 1
 {
     Sni = sni, RemoteIp = ip, TsUtc = ts, ClientBytes = bytes,
     Image = @"C:\Program Files\Google\Chrome\Application\chrome.exe", Pid = 1000,
+};
+
+static TransmissionRecord RecAt(string sni, string ip, DateTime ts, string image, int pid) => new()
+{
+    Sni = sni, RemoteIp = ip, TsUtc = ts, ClientBytes = 12_000, Image = image, Pid = pid,
 };
 
 DateTime T0 = DateTime.UtcNow;
@@ -149,6 +156,90 @@ Check("verdict: fast + calm → Healthy", vHealthy.Kind == SiteVerdictService.Ve
 
 var vNone = SiteVerdictService.Decide(null, null);
 Check("verdict: no evidence → Insufficient", vNone.Kind == SiteVerdictService.VerdictKind.Insufficient, vNone.Kind.ToString());
+
+// ─────────────────────────────────────────────────────────────────────
+// 5b. Dependency-block join — "the site is fine, its dependency is
+//     blocked here" (the login-failure shape observed in the wild:
+//     healthy site probes + silently blocked captcha-host connects
+//     during the page load, which carry no SNI of their own)
+// ─────────────────────────────────────────────────────────────────────
+DateTime T1 = DateTime.UtcNow.AddMinutes(-30);
+string braveExe = @"C:\Users\u\AppData\Local\BraveSoftware\Brave-Browser\Application\brave.exe";
+DependencyBlockService.BlockInfoLite Info(string ip, DateTime since) =>
+    new() { Class = "Unclassified", Created = since };
+
+var depRows = new List<TransmissionRecord>
+{
+    // The visit: browser 2000 loads the sign-in page and calls its API.
+    RecAt("www.spectrum.net", "52.84.20.127", T1, braveExe, 2000),
+    RecAt("apis.spectrum.net", "134.150.63.225", T1.AddSeconds(2), braveExe, 2000),
+    // History: this machine has recorded the (soon blocked) Google frontend
+    // serving other browsing — the attribution input.
+    RecAt("mail.google.com", "142.251.34.67", T1.AddHours(-6), braveExe, 2000),
+    RecAt("www.google.com", "142.251.34.69", T1.AddHours(-6).AddMinutes(1), braveExe, 2000),
+    // A different browser's traffic — must not influence the join.
+    RecAt("github.com", "140.82.116.3", T1.AddSeconds(1), @"C:\Program Files\Google\Chrome\Application\chrome.exe", 1000),
+};
+var depHits = new List<DependencyBlockService.BlockHitLite>
+{
+    // In-window: 4s and 7s after the page load — the causal set.
+    new() { TimeUtc = T1.AddSeconds(4), Image = braveExe, Pid = 2000, DestIp = "142.251.34.67", MatchKind = "ip" },
+    new() { TimeUtc = T1.AddSeconds(7), Image = braveExe, Pid = 2000, DestIp = "142.251.34.67", MatchKind = "ip" },
+    // Out of every visit window → context only, never the verdict.
+    new() { TimeUtc = T1.AddHours(-3), Image = braveExe, Pid = 2000, DestIp = "142.251.41.3", MatchKind = "ip" },
+    // Another process hitting a block — irrelevant to this site's story.
+    new() { TimeUtc = T1.AddSeconds(5), Image = @"C:\Windows\System32\svchost.exe", Pid = 999, DestIp = "142.251.99.99", MatchKind = "ip" },
+};
+
+var dep = DependencyBlockService.Analyze("www.spectrum.net", depRows, depHits,
+    ip => ip == "142.251.34.67" ? Info(ip, DateTime.UtcNow.AddDays(-3)) : null);
+Check("dep: one in-window address, attempts aggregated",
+    dep.InWindow.Count == 1 && dep.InWindow[0].Ip == "142.251.34.67" && dep.InWindow[0].Attempts == 2,
+    $"{dep.InWindow.Count}/{dep.InWindow.FirstOrDefault()?.Ip}/{dep.InWindow.FirstOrDefault()?.Attempts}");
+Check("dep: attribution names the served host",
+    dep.InWindow[0].ServedHosts.Contains("mail.google.com"), string.Join(",", dep.InWindow[0].ServedHosts));
+Check("dep: block provenance carried", dep.InWindow[0].BlockedSince.HasValue);
+Check("dep: out-of-window hit kept as context only",
+    dep.Nearby.Count == 1 && dep.Nearby[0].Ip == "142.251.41.3", $"{dep.Nearby.Count}");
+Check("dep: other processes excluded from the join",
+    !dep.InWindow.Concat(dep.Nearby).Any(h => h.Ip == "142.251.99.99"));
+Check("dep: co-visited dependency host found (the page's API)",
+    dep.CoVisitedHosts.Contains("apis.spectrum.net"), string.Join(",", dep.CoVisitedHosts));
+
+var rot = DependencyBlockService.MeasureRotation("www.google.com",
+    Enumerable.Range(0, 8).Select(i => $"142.251.{150 + i}.119").Concat(new[] { "142.251.34.67" }),
+    ip => ip == "142.251.34.67" ? Info(ip, DateTime.UtcNow) : null);
+Check("dep: rotation counts blocked fraction", rot != null && rot.BlockedAddresses == 1 && rot.TotalAddresses == 9,
+    rot == null ? "null" : $"{rot.BlockedAddresses}/{rot.TotalAddresses}");
+Check("dep: rotation null when nothing blocked",
+    DependencyBlockService.MeasureRotation("www.google.com", new[] { "1.1.1.1", "2.2.2.2" }, _ => null) == null);
+
+// Healthy probe + in-window blocked dependency → DependencyBlocked, not Healthy.
+SiteProbeService.SiteProbeReport HealthyReport() => Report(new List<SiteProbeService.EdgeProbe>
+{
+    new() { Ip = "52.84.20.127", TcpConnectMs = 40, TlsDefaultMs = 60, TlsDefaultVersion = "Tls13", TlsPlainMs = 58, TlsPlainVersion = "Tls12" },
+}, controls: new List<SiteProbeService.ControlProbe> { new() { Host = "ctl", TcpConnectMs = 30, TlsMs = 45 } });
+
+var vDep = SiteVerdictService.Decide(null, HealthyReport(), dep);
+Check("verdict: healthy site + blocked dependency → DependencyBlocked",
+    vDep.Kind == SiteVerdictService.VerdictKind.DependencyBlocked, vDep.Kind.ToString());
+Check("verdict: headline names the blocked address and process",
+    vDep.Headline.Contains("142.251.34.67") && vDep.Headline.Contains("brave.exe"), vDep.Headline);
+Check("verdict: evidence lists the hit with its served host",
+    vDep.Evidence.Any(l => l.Contains("142.251.34.67") && l.Contains("mail.google.com")),
+    string.Join(" | ", vDep.Evidence));
+
+// Honesty guard: nearby-only hits must NOT hijack a healthy verdict.
+var depNearbyOnly = DependencyBlockService.Analyze("www.spectrum.net", depRows,
+    new List<DependencyBlockService.BlockHitLite> { depHits[2] }, _ => null);
+var vStillHealthy = SiteVerdictService.Decide(null, HealthyReport(), depNearbyOnly);
+Check("verdict: nearby-only hits keep Healthy honest",
+    vStillHealthy.Kind == SiteVerdictService.VerdictKind.Healthy, vStillHealthy.Kind.ToString());
+
+// And with no probe at all, the join stands on its own recorded evidence.
+var vDepNoProbe = SiteVerdictService.Decide(null, null, dep);
+Check("verdict: dependency evidence alone still fires",
+    vDepNoProbe.Kind == SiteVerdictService.VerdictKind.DependencyBlocked, vDepNoProbe.Kind.ToString());
 
 // ─────────────────────────────────────────────────────────────────────
 // 6. LIVE dual-shape probe — loopback TLS server vs loopback black hole
