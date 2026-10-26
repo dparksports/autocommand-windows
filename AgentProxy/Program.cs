@@ -65,8 +65,11 @@ string ServerVersion()
 // ── activity trail ──────────────────────────────────────────────────────
 // Proxy lifetimes belong in the same audit trail as sessions and tool
 // calls. Never to stdout — stdout is JSON-RPC and nothing else.
-string AgentDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                               "AutoCommand", "agent");
+// AC_AGENT_DIR overrides the agent directory for offline self-tests.
+string AgentDir = Environment.GetEnvironmentVariable("AC_AGENT_DIR") is string d && d.Length > 0
+    ? d
+    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                   "AutoCommand", "agent");
 string ClientName = ""; // from initialize clientInfo, when the client sends one
 void LogProxy(string what, string detail)
 {
@@ -89,14 +92,13 @@ void LogProxy(string what, string detail)
 var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
 var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
-(int Port, string Token)? ReadSession()
+(int Port, string Token, long Pid)? ReadSession()
 {
     try
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                   "AutoCommand", "agent", "session.json");
+        string path = Path.Combine(AgentDir, "session.json");
         var o = JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
-        return (o["port"].GetValue<int>(), o["token"].GetValue<string>());
+        return (o["port"].GetValue<int>(), o["token"].GetValue<string>(), (long?)o["pid"] ?? 0);
     }
     catch { return null; }
 }
@@ -139,6 +141,150 @@ static string Error(JsonNode id, int code, string message) =>
         ["id"] = id?.DeepClone(),
         ["error"] = new JsonObject { ["code"] = code, ["message"] = message },
     }.ToJsonString();
+
+static bool HasResult(string response)
+{
+    try { return (JsonNode.Parse(response ?? "") as JsonObject)?["result"] != null; }
+    catch { return false; }
+}
+
+static bool IsNotInitialized(string response)
+{
+    try { return (int?)((JsonNode.Parse(response ?? "") as JsonObject)?["error"]?["code"]) == -32002; }
+    catch { return false; }
+}
+
+// ── upstream lifecycle resync ───────────────────────────────────────────
+// The app bridge enforces its own initialize-before-request rule per app
+// process lifetime, but the client's initialize is consumed exactly once —
+// possibly hours before the app restarts or the user restarts the AI
+// session. After that the bridge is fresh, every forwarded request dies
+// with -32002 forever, and the client never knows (its pipe to this proxy
+// never broke). So track WHICH bridge instance was initialized upstream
+// ("pid:port:token" from session.json) and replay the client's handshake
+// whenever it changes — plus one reactive retry if the bridge reset without
+// session.json changing.
+JsonNode clientHello = null;   // params of the client's initialize, for faithful replay
+string upstreamKey = null;     // bridge instance the handshake was last sent to
+long reinitCounter = 0;
+
+// ── wake-on-knock (opt-in) ──────────────────────────────────────────────
+// With no session and the user's wake preference on, this proxy may launch
+// AutoCommand itself: headless (--agent-headless 1800 — read-only, no
+// window, self-exits after 30 minutes). The app's manifest requires
+// administrator, so ShellExecute surfaces ONE UAC approval — the user is
+// present (they just asked their assistant to look at the PC). No prompts
+// repeat: a cooldown stops retry storms, and an already-running app is
+// never spawned over (its session being off is a Settings action, not a
+// launch). AC_APP_EXE overrides the app path for offline self-tests.
+DateTime lastKnockUtc = DateTime.MinValue;
+TimeSpan KnockCooldown = TimeSpan.FromMinutes(5);
+TimeSpan KnockWaitCap = TimeSpan.FromSeconds(25);
+
+static bool PidAlive(long pid)
+{
+    if (pid <= 0) return false;
+    try
+    {
+        using var p = Process.GetProcessById((int)pid);
+        // name guard: a reused pid from an unrelated process is not a session
+        return p.ProcessName.StartsWith("AutoCommand", StringComparison.OrdinalIgnoreCase);
+    }
+    catch { return false; }
+}
+
+static bool InteractiveAppRunning()
+{
+    // AC_SIMULATE_APP_RUNNING is a self-test override for the running-app
+    // probe (test boxes usually have a live interactive instance).
+    if (Environment.GetEnvironmentVariable("AC_SIMULATE_APP_RUNNING") is string sim &&
+        sim == "0") return false;
+    return Process.GetProcessesByName("AutoCommand").Any();
+}
+
+static string AppExePath()
+{
+    string? overridePath = Environment.GetEnvironmentVariable("AC_APP_EXE");
+    if (!string.IsNullOrEmpty(overridePath)) return overridePath;
+    try
+    {
+        // this proxy lives in <install>\tools\ — the app sits one level up
+        string? dir = Path.GetDirectoryName(Environment.ProcessPath);
+        return Path.Combine(Path.GetDirectoryName(dir ?? "") ?? "", "AutoCommand.exe");
+    }
+    catch { return ""; }
+}
+
+bool WakePrefOn()
+{
+    try { return File.ReadAllText(Path.Combine(AgentDir, "wake_pref.txt")).Trim() == "on"; }
+    catch { return false; }
+}
+
+async Task<(int Port, string Token, long Pid)?> TryWakeAsync()
+{
+    if (!WakePrefOn()) return null;
+    if (DateTime.UtcNow - lastKnockUtc < KnockCooldown) return null;
+    if (InteractiveAppRunning())
+    {
+        // Running app with its session off is a user decision — never spawn
+        // a second instance over it; the offline guidance covers this case.
+        return null;
+    }
+
+    string exe = AppExePath();
+    if (exe.Length == 0 || !File.Exists(exe))
+    {
+        LogProxy("wake", "app exe not found next to proxy — install layout changed?");
+        lastKnockUtc = DateTime.UtcNow;
+        return null;
+    }
+
+    lastKnockUtc = DateTime.UtcNow;
+    try
+    {
+        Process.Start(new ProcessStartInfo(exe, "--agent-headless 1800") { UseShellExecute = true });
+        LogProxy("wake", "launch requested (--agent-headless 1800) — awaiting UAC + cold start");
+    }
+    catch (Exception ex)
+    {
+        LogProxy("wake", "launch failed: " + ex.Message);
+        return null;
+    }
+
+    var deadline = DateTime.UtcNow + KnockWaitCap;
+    while (DateTime.UtcNow < deadline)
+    {
+        await Task.Delay(500);
+        var s = ReadSession();
+        if (s != null && PidAlive(s.Value.Pid)) return s;
+    }
+    LogProxy("wake", "no live session appeared within the wait window");
+    return null;
+}
+
+string SessionKey((int Port, string Token, long Pid) s) => $"{s.Pid}:{s.Port}:{s.Token}";
+
+async Task<bool> EnsureUpstreamInitializedAsync((int Port, string Token, long Pid) s)
+{
+    string key = SessionKey(s);
+    if (upstreamKey == key) return false;
+    var init = new JsonObject
+    {
+        ["jsonrpc"] = "2.0",
+        ["id"] = $"proxy-reinit-{++reinitCounter}",
+        ["method"] = "initialize",
+        ["params"] = clientHello?.DeepClone() ?? new JsonObject(),
+    };
+    string response = await ForwardAsync(s.Port, s.Token, init.ToJsonString(), init["id"]);
+    if (HasResult(response))
+    {
+        upstreamKey = key;
+        LogProxy("reinit", $"app bridge pid {s.Pid} — initialize replayed upstream");
+        return true;
+    }
+    return false;   // bridge unreachable — ForwardAsync already returned guidance
+}
 
 string AnswerOffline(JsonObject rpc)
 {
@@ -185,7 +331,9 @@ string AnswerOffline(JsonObject rpc)
                     {
                         ["type"] = "text",
                         ["text"] = "AutoCommand is not running or its AI session is off.\n" +
-                            "Ask the user to open AutoCommand → Settings → 'AI access' → Start session, then retry.",
+                            "Ask the user to open AutoCommand → Settings → 'AI access' → Start session, then retry.\n" +
+                            "(To stop being asked: Settings → AI access → tick 'Start the session automatically' and/or " +
+                            "'let my AI assistant launch it in the background'.)",
                     },
                 },
                 ["isError"] = true,
@@ -238,6 +386,7 @@ LogProxy("start", $"spawned by {parentName} ({parentPid}), proxy v{ServerVersion
 // working immediately, and the client should re-list tools.
 bool clientInitialized = false; // MCP lifecycle: no requests before initialize
 bool wasOnline = false;
+bool staleSessionLogged = false;
 try
 {
     string line;
@@ -270,30 +419,76 @@ try
         if (method == "initialize")
         {
             clientInitialized = true;
+            clientHello = (rpc["params"] as JsonObject)?.DeepClone();
             ClientName = (rpc["params"]?["clientInfo"] as JsonObject)?["name"]?.GetValue<string>() ?? "";
             if (ClientName.Length > 0) LogProxy("client", ClientName);
         }
 
         var session = ReadSession();
-        bool online = session != null;
+        // a session file whose pid is dead (app crashed without cleanup) is
+        // offline, not online — forwarding into it just times out
+        bool online = session != null && PidAlive(session.Value.Pid);
+        if (session != null && !online && !staleSessionLogged)
+        {
+            staleSessionLogged = true;
+            LogProxy("stale", "session.json exists but its app pid is gone — treating as offline");
+        }
+
+        // wake-on-knock: no live session + a real post-handshake request +
+        // the user's opt-in → launch the headless app and wait for its session
+        if (!online && clientInitialized && isRequest && method != "initialize" && method != "ping")
+        {
+            var woke = await TryWakeAsync();
+            if (woke != null)
+            {
+                session = woke;
+                online = true;
+            }
+        }
+
         bool flipped = online != wasOnline;
         wasOnline = online;
 
+        // Bridge instance changed since the last handshake reached it (app
+        // restart, AI session restart): replay the client's initialize
+        // BEFORE forwarding, or the bridge would refuse the request.
+        bool reinitialized = false;
+        if (online && clientInitialized && isRequest && method != "initialize" && method != "ping")
+            reinitialized = await EnsureUpstreamInitializedAsync(session.Value);
+
         string response;
         if (online)
+        {
             response = await ForwardAsync(session.Value.Port, session.Value.Token, line, rpc["id"]);
+
+            // The client's own initialize IS the upstream handshake — book
+            // it, so the first regular request doesn't replay a redundant one.
+            if (isRequest && method == "initialize" && HasResult(response))
+                upstreamKey = SessionKey(session.Value);
+
+            // Bridge reset without session.json changing (defensive): its
+            // -32002 is replayable exactly like an identity change.
+            if (isRequest && method != "initialize" && IsNotInitialized(response))
+            {
+                upstreamKey = null;
+                reinitialized |= await EnsureUpstreamInitializedAsync(session.Value);
+                response = await ForwardAsync(session.Value.Port, session.Value.Token, line, rpc["id"]);
+            }
+        }
         else
             response = AnswerOffline(rpc);
 
         if (isRequest && !string.IsNullOrEmpty(response))
             stdout.WriteLine(response);
 
-        // the session flipped while this proxy was connected: the client's
-        // cached tool list is stale. Tell it only AFTER the response to the
-        // in-flight message (usually initialize) has been written, and only
-        // if the client finished initializing — a notification racing the
-        // initialize response confuses strict clients.
-        if (flipped && clientInitialized)
+        // the session flipped while this proxy was connected, or the bridge
+        // was re-initialized after a restart: in both cases the client's
+        // cached tool list is stale (a new app build can add tools). Tell it
+        // only AFTER the response to the in-flight message (usually
+        // initialize) has been written, and only if the client finished
+        // initializing — a notification racing the initialize response
+        // confuses strict clients.
+        if ((flipped || reinitialized) && clientInitialized)
             stdout.WriteLine(new JsonObject
             {
                 ["jsonrpc"] = "2.0",

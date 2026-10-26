@@ -18,15 +18,19 @@ namespace AutoCommand.Views
 
         private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
-            // AI access: mutating preference + live session status
+            // AI access: mutating + autostart + wake preferences + live session status
             try
             {
-                string prefPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "AutoCommand", "agent", "mutating_pref.txt");
-                AgentMutatingCheck.IsChecked = File.Exists(prefPath) && File.ReadAllText(prefPath).Trim() == "on";
+                AgentMutatingCheck.IsChecked = PrefOn(MutatingPrefPath);
+                AgentAutostartCheck.IsChecked = PrefOn(AutostartPrefPath);
+                AgentWakeCheck.IsChecked = PrefOn(WakePrefPath);
             }
-            catch { AgentMutatingCheck.IsChecked = false; }
+            catch
+            {
+                AgentMutatingCheck.IsChecked = false;
+                AgentAutostartCheck.IsChecked = false;
+                AgentWakeCheck.IsChecked = false;
+            }
             PopulateClientButtons();
             StartAgentRefresh();
         }
@@ -41,6 +45,30 @@ namespace AutoCommand.Views
         private static string MutatingPrefPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "AutoCommand", "agent", "mutating_pref.txt");
+
+        private static string AutostartPrefPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AutoCommand", "agent", "autostart_pref.txt");
+
+        private static string WakePrefPath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AutoCommand", "agent", "wake_pref.txt");
+
+        private static bool PrefOn(string path)
+        {
+            try { return File.Exists(path) && File.ReadAllText(path).Trim() == "on"; }
+            catch { return false; }
+        }
+
+        private static void WritePref(string path, bool on)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, on ? "on" : "off");
+            }
+            catch { /* persistence best-effort */ }
+        }
 
         private void UserControl_Unloaded(object sender, RoutedEventArgs e) => _agentRefresh.Stop();
 
@@ -109,6 +137,59 @@ namespace AutoCommand.Views
                 MessageBox.Show(
                     "Takes effect for NEW sessions. Stop and restart the session to apply it now.",
                     "Be My Guest", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void AgentAutostartCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            bool on = AgentAutostartCheck.IsChecked == true;
+            if (on)
+            {
+                // Ticking the box IS the tier-1 consent moment — the same
+                // grant the Start button asks for, standing instead of per-click.
+                var answer = MessageBox.Show(
+                    "Start the AI access session automatically whenever AutoCommand runs?\n\n" +
+                    "An AI assistant (e.g. ZCode) will be able to READ this machine's security telemetry " +
+                    "whenever the app is open, without you starting the session each time:\n" +
+                    "live connections and their processes, svchost identities, PID provenance reports,\n" +
+                    "Sysmon events and trace analysis. What it reads can be repeated by the assistant.\n\n" +
+                    "• Read-only tools answer immediately while a session is on.\n" +
+                    "• Mutating actions still ask you on every single call (and only exist if ticked on above).\n" +
+                    "• A session still ends when you stop it or close AutoCommand.\n\n" +
+                    "Keep sessions automatic?",
+                    "Be My Guest — consent", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+                if (answer != MessageBoxResult.Yes)
+                {
+                    AgentAutostartCheck.IsChecked = false;
+                    return;
+                }
+            }
+            WritePref(AutostartPrefPath, on);
+        }
+
+        private void AgentWakeCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            bool on = AgentWakeCheck.IsChecked == true;
+            if (on)
+            {
+                var answer = MessageBox.Show(
+                    "Let your AI assistant launch AutoCommand in the background when it isn't running?\n\n" +
+                    "When a tool call arrives and no session exists, the assistant's proxy may start " +
+                    "AutoCommand headless: no window, READ-ONLY session, exits by itself after 30 minutes.\n" +
+                    "Windows will show ONE UAC approval for that launch (AutoCommand manages the firewall,\n" +
+                    "so it runs elevated).\n\n" +
+                    "• A background session can never perform mutating actions — those need this app's\n" +
+                    "  per-action confirmations.\n" +
+                    "• If AutoCommand is already running but its session is off, nothing launches;\n" +
+                    "  the assistant tells you to start it from Settings.\n\n" +
+                    "Allow background launch?",
+                    "Be My Guest — consent", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
+                if (answer != MessageBoxResult.Yes)
+                {
+                    AgentWakeCheck.IsChecked = false;
+                    return;
+                }
+            }
+            WritePref(WakePrefPath, on);
         }
 
         /// <summary>

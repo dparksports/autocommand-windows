@@ -96,6 +96,33 @@ namespace AutoCommand
             // while UsagePingService.Endpoint is unconfigured. Spec and server
             // code: telemetry/ in the repository.
             _ = Services.UsagePingService.RunStartupFlowAsync();
+
+            // Auto-started AI session (opt-in from Settings → AI access): the
+            // consent was given once at the checkbox; every launch honors it.
+            // Read-only unless the mutating preference is separately on.
+            if (AgentAutostartPrefOn())
+            {
+                var (ok, message) = Services.AgentBridgeService.Instance.Start(
+                    allowMutating: AgentMutatingPrefOn());
+                if (ok)
+                    Services.AgentBridgeService.Instance.LogActivity("session", "started (auto)",
+                        $"mutating {(AgentMutatingPrefOn() ? "on" : "off")}");
+            }
+        }
+
+        private static string AgentPrefPath(string name) => System.IO.Path.Combine(
+            Services.AgentBridgeService.AgentDir, name);
+
+        private static bool AgentAutostartPrefOn()
+        {
+            try { return System.IO.File.ReadAllText(AgentPrefPath("autostart_pref.txt")).Trim() == "on"; }
+            catch { return false; }
+        }
+
+        private static bool AgentMutatingPrefOn()
+        {
+            try { return System.IO.File.ReadAllText(AgentPrefPath("mutating_pref.txt")).Trim() == "on"; }
+            catch { return false; }
         }
 
         // Headless AI session: same bridge the Settings card starts, minus the
@@ -119,6 +146,25 @@ namespace AutoCommand
         private void RunAgentHeadless(string[] args)
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+            // Single-instance guard: a wake-knock while the interactive app is
+            // already running must not spawn a second bridge fighting over
+            // session.json. Exit silently — the proxy's fallback guidance then
+            // tells the user to start the session from Settings.
+            try
+            {
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("AutoCommand"))
+                    using (p)
+                    {
+                        if (p.Id != System.Environment.ProcessId)
+                        {
+                            System.Console.WriteLine("another AutoCommand instance is running — headless session skipped");
+                            Shutdown();
+                            return;
+                        }
+                    }
+            }
+            catch { /* enumeration failure should not block the session */ }
 
             int seconds = 0;
             int flagIndex = System.Array.FindIndex(args,

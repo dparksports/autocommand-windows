@@ -129,6 +129,7 @@ namespace AutoCommand.Services
             _cts?.Dispose();
             _cts = null;
             try { if (File.Exists(SessionPath)) File.Delete(SessionPath); } catch { }
+            AppendFeed(new JsonObject { ["type"] = "session_stopped", ["port"] = _port });
             LogActivity("session", "stopped", "");
             Activity?.Invoke("session stopped");
         }
@@ -413,7 +414,8 @@ namespace AutoCommand.Services
 
         // ── activity log + feed (Phase 1) ─────────────────────────────────
 
-        private void LogActivity(string kind, string what, string detail, string outcome = null)
+        /// <summary>Appends to the agent audit trail; public for startup paths that act outside a session.</summary>
+        public void LogActivity(string kind, string what, string detail, string outcome = null)
         {
             try
             {
