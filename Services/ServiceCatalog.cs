@@ -9,6 +9,16 @@ namespace AutoCommand.Services
         public string DisplayName;
         public string Description;
         public ServiceImpact Impact;
+
+        /// <summary>Phone Home tab only: the authored "why does this phone
+        /// home, and what does normal look like" story. Null on entries that
+        /// are not part of the curated Phone Home card set.</summary>
+        public string PhoneHomeStory;
+
+        /// <summary>Phone Home tab only: the upper edge of the typical
+        /// connects-per-hour band, from observed behavior on ordinary
+        /// machines. Null = no authored baseline (the card says so).</summary>
+        public int? NormalMaxPerHour;
     }
 
     /// <summary>
@@ -27,18 +37,28 @@ namespace AutoCommand.Services
         private static readonly Dictionary<string, ServiceInfo> Entries = new()
         {
             // ── Windows services (svchost-hosted, by -s/SCM service name) ──
-            ["wuauserv"] = H("Windows Update", "Downloads and installs Windows updates. Blocking it stops security patches from arriving."),
-            ["dosvc"] = M("Delivery Optimization", "Peers/CDN delivery of Windows Update and Store content — most Akamai/Gcore traffic from svchost is this service."),
+            ["wuauserv"] = H("Windows Update", "Downloads and installs Windows updates. Blocking it stops security patches from arriving.",
+            story: "Talks to Windows Update during scans and downloads — bursts while updates are being fetched or installed, near-zero the rest of the day.",
+            maxPerHour: 20),
+            ["dosvc"] = M("Delivery Optimization", "Peers/CDN delivery of Windows Update and Store content — most Akamai/Gcore traffic from svchost is this service.",
+            story: "Fetches Windows Update and Store content from Microsoft CDNs (and LAN peers). Sudden bursts during updates are expected; a steady all-day hum is not.",
+            maxPerHour: 40),
             ["usosvc"] = M("Update Session Orchestrator", "Coordinates update download/install sessions between Windows Update and the user session."),
             ["mousocoreworker"] = M("Update Orchestrator Worker", "User-session worker for update orchestration (scans, downloads, restart prompts)."),
-            ["bits"] = M("Background Intelligent Transfer", "Throttled background file transfers used by updates, Defender and administrators."),
+            ["bits"] = M("Background Intelligent Transfer", "Throttled background file transfers used by updates, Defender and administrators.",
+            story: "Carries background file transfers — updates, Defender signature jobs, admin scripts — over HTTP(S) in throttled pieces, so connects come in small clusters.",
+            maxPerHour: 15),
             ["dnscache"] = H("DNS Client (Dnscache)", "Resolves hostnames for the whole system. Blocking it breaks name resolution — the classic 'I blocked svchost and lost my internet'."),
             ["nlasvc"] = H("Network Location Awareness", "Detects network connectivity/state; NCSI probes. Blocking breaks network status detection and often all traffic."),
             ["ncsi"] = H("Network Connectivity Indicator", "The active probe behind the taskbar internet icon (msftconnecttest.com)."),
             ["dhcp"] = H("DHCP Client", "Obtains the machine's IP address. Blocking it kills new network connections."),
             ["winhttpautoproxysvc"] = M("WinHTTP Proxy Discovery", "Finds the network's proxy settings (WPAD) for system services."),
-            ["cryptsvc"] = M("Cryptographic Services", "Root-certificate trust and catalog verification — blocking breaks HTTPS for system components."),
-            ["wpnservice"] = M("Windows Push Notifications", "Delivers live tiles, toasts and app notifications (WNS channel)."),
+            ["cryptsvc"] = M("Cryptographic Services", "Root-certificate trust and catalog verification — blocking breaks HTTPS for system components.",
+            story: "Fetches certificate revocation lists and root-certificate updates on behalf of every program doing TLS. Plain port-80 fetches to Cloudflare/Google CDNs are normal — CRLs are signed, so they travel unencrypted by design. Its rate tracks how much TLS the whole machine is doing.",
+            maxPerHour: 30),
+            ["wpnservice"] = M("Windows Push Notifications", "Delivers live tiles, toasts and app notifications (WNS channel).",
+            story: "Keeps a channel open to the Windows Push Notification service and cycles it periodically — that is how toasts, live tiles and app notifications arrive.",
+            maxPerHour: 12),
             ["w32time"] = N("Windows Time", "Keeps the system clock in sync (NTP)."),
             ["eventlog"] = H("Windows Event Log", "Collects system logs. Blocking can make services fail to start."),
             ["schedule"] = H("Task Scheduler", "Runs scheduled tasks; many updaters depend on it."),
@@ -49,13 +69,19 @@ namespace AutoCommand.Services
             ["appinfo"] = N("Application Information", "Elevates UAC prompts — rarely network-active."),
             ["trkwks"] = N("Distributed Link Tracking", "Maintains shell links; phones home to Microsoft rarely."),
             ["themes"] = N("Themes", "Visual styles; not network-active on its own."),
-            ["netprofm"] = M("Network List Service", "Reports network connectivity and properties to apps. Its probes hit Microsoft/Akamai edges; blocking can flip the taskbar to 'no internet' and break Store/Start web content."),
+            ["netprofm"] = M("Network List Service", "Reports network connectivity and properties to apps. Its probes hit Microsoft/Akamai edges; blocking can flip the taskbar to 'no internet' and break Store/Start web content.",
+            story: "Reports network connectivity and properties to apps; probes Microsoft/Akamai edges whenever the network state changes (Wi-Fi roam, VPN up/down, resume).",
+            maxPerHour: 12),
             ["installservice"] = N("Microsoft Store Install Service", "Installs and updates Store apps and their licenses."),
             ["cdpsvc"] = M("Connected Devices Platform", "Device discovery/continuity between your PC, phones and the cloud."),
             ["tokenbroker"] = M("Account Token Broker", "Microsoft-account / AAD sign-in tokens for apps. Blocking breaks app sign-in."),
             ["licensing"] = M("Client License Service", "Windows/Store licensing checks."),
-            ["wlidsvc"] = M("Microsoft Account Sign-in", "Sign-in helper for Microsoft accounts."),
-            ["diagtrack"] = N("Connected User Experiences (DiagTrack)", "Windows diagnostic/telemetry upload. A legitimate blocking target if you want less telemetry."),
+            ["wlidsvc"] = M("Microsoft Account Sign-in", "Sign-in helper for Microsoft accounts.",
+            story: "Sign-in helper for Microsoft accounts — checks identity and token endpoints when apps sign in or silently refresh credentials.",
+            maxPerHour: 10),
+            ["diagtrack"] = N("Connected User Experiences (DiagTrack)", "Windows diagnostic/telemetry upload. A legitimate blocking target if you want less telemetry.",
+            story: "Batches Windows diagnostic/usage data and uploads it to Microsoft on a timer — roughly every 15–40 minutes, usually over one long-lived TLS connection rather than rapid beacons.",
+            maxPerHour: 6),
             ["ssdpsrv"] = N("SSDP Discovery", "UPnP device discovery on the local network."),
             ["fdrespub"] = N("Function Discovery Publish", "Publishes this PC on the network for discovery."),
 
@@ -78,9 +104,18 @@ namespace AutoCommand.Services
             ["svchost:unresolved"] = N("svchost — service unknown", "Service identity could not be recovered yet. Run attribution repair to name the actual service."),
         };
 
-        private static ServiceInfo H(string n, string d) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.High };
-        private static ServiceInfo M(string n, string d) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.Medium };
-        private static ServiceInfo N(string n, string d) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.Normal };
+        private static ServiceInfo H(string n, string d, string story = null, int? maxPerHour = null) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.High, PhoneHomeStory = story, NormalMaxPerHour = maxPerHour };
+        private static ServiceInfo M(string n, string d, string story = null, int? maxPerHour = null) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.Medium, PhoneHomeStory = story, NormalMaxPerHour = maxPerHour };
+        private static ServiceInfo N(string n, string d, string story = null, int? maxPerHour = null) => new() { DisplayName = n, Description = d, Impact = ServiceImpact.Normal, PhoneHomeStory = story, NormalMaxPerHour = maxPerHour };
+
+        /// <summary>The Phone Home tab's curated card set, in display order
+        /// (the tab re-sorts by measured connects/hour). Every key here has
+        /// an authored PhoneHomeStory and a normal band.</summary>
+        public static readonly string[] CuratedPhoneHomeKeys =
+        {
+            "diagtrack", "cryptsvc", "dosvc", "wpnservice",
+            "wlidsvc", "netprofm", "wuauserv", "bits",
+        };
 
         public static bool TryGet(string serviceKey, out ServiceInfo info) =>
             Entries.TryGetValue((serviceKey ?? "").Trim().ToLowerInvariant(), out info) &&

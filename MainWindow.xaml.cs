@@ -106,14 +106,15 @@ namespace AutoCommand
         // until Settings → Advanced investigation turns them on
         // -------------------------------------------------------------------
 
-        /// <summary>True when the tab is one of the eight opt-in tabs.</summary>
+        /// <summary>True when the tab is one of the opt-in tabs.</summary>
         private bool IsAdvancedTab(System.Windows.Controls.TabItem t) =>
             t == SpawnsNavItem || t == BitsNavItem || t == TrafficNavItem ||
+            t == TracesNavItem ||
             t == BlackHoleNavItem || t == DefenderNavItem ||
             t == PrivacyNavItem || t == OneSettingsNavItem || t == SysmonNavItem;
 
         /// <summary>
-        /// Shows or hides the eight advanced-investigation tabs. Also called
+        /// Shows or hides the advanced-investigation tabs. Also called
         /// by SettingsView when the toggle flips (applies immediately), and
         /// keeps the group-header tooltips honest about what is currently
         /// shown. When the tab being viewed is hidden, selection lands back
@@ -125,6 +126,7 @@ namespace AutoCommand
             SpawnsNavItem.Visibility = v;
             BitsNavItem.Visibility = v;
             TrafficNavItem.Visibility = v;
+            TracesNavItem.Visibility = v;
             BlackHoleNavItem.Visibility = v;
             DefenderNavItem.Visibility = v;
             PrivacyNavItem.Visibility = v;
@@ -134,7 +136,7 @@ namespace AutoCommand
             WatchHeaderText.ToolTip = enabled
                 ? "Feeds that show what this machine is running and where it connects."
                 : "Feeds that show what this machine is running and where it connects.\n" +
-                  "Spawns, BITS Transfers and Traffic Patterns are hidden — Settings → Advanced investigation shows them.";
+                  "Spawns, Traces, BITS Transfers and Traffic Patterns are hidden — Settings → Advanced investigation shows them.";
             SystemHeaderText.ToolTip = enabled
                 ? "AI access, privacy, Windows telemetry, Sysmon health and app settings."
                 : "AI access and app settings.\n" +

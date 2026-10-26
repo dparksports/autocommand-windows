@@ -37,6 +37,15 @@
                 </TabItem.Header>
                 <views:SvchostMonitorView x:Name="SvchostTab"/>
             </TabItem>
+            <TabItem x:Name="PhoneHomeNavItem">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="📶" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Phone Home" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:PhoneHomeView x:Name="PhoneHomeTab"/>
+            </TabItem>
             <TabItem x:Name="SpawnsNavItem">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
@@ -45,6 +54,15 @@
                     </StackPanel>
                 </TabItem.Header>
                 <views:SpawnsView x:Name="SpawnsTab"/>
+            </TabItem>
+            <TabItem x:Name="TracesNavItem">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🔬" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Traces" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <views:TracesView x:Name="TracesTab"/>
             </TabItem>
             <TabItem x:Name="BitsNavItem">
                 <TabItem.Header>
