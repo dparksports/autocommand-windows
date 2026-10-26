@@ -203,6 +203,12 @@ namespace AutoCommand
                     // (independent of Sysmon, so it runs before the install check)
                     Services.FirewallService.EnsureDropLoggingOnce();
 
+                    // name-blocked apps stay blocked across version moves: extends
+                    // coverage when a blocked exe appears at a new path and retires
+                    // rules whose path an update deleted. Runs without Sysmon too
+                    // (startup sweep + retire pass need no event channel).
+                    Services.AppBlockCoverageService.Instance.Start();
+
                     var installer = new Services.SysmonInstallerService();
                     if (installer.DetectInstallState() != Services.SysmonInstallState.Installed)
                         return; // nothing installed — the install path sizes and archives it

@@ -437,6 +437,10 @@ namespace AutoCommand.Services
         /// Removes the inbound/outbound block rules previously created for an
         /// application path (matched on the rule name prefix used by the
         /// monitor views plus the exact ApplicationName). Returns the removal count.
+        /// When the exact path matches nothing — the binary moved after an
+        /// update, or the stale rule was already retired — falls back to the
+        /// exe NAME so "unblock app.exe" clears every sibling path rule too,
+        /// not just the one row the user happened to click.
         /// </summary>
         public Task<int> RemoveBlockRulesForAppAsync(string appPath)
         {
@@ -461,6 +465,15 @@ namespace AutoCommand.Services
                             }
                         }
                         catch { }
+                    }
+
+                    if (names.Count == 0 && !string.IsNullOrEmpty(appPath))
+                    {
+                        string exe = System.IO.Path.GetFileName(appPath);
+                        // typed local: the call takes a dynamic policy, so its
+                        // result must be cast back before LINQ can chain on it
+                        List<(string name, string app, bool enabled)> siblings = GetAppRulesForExe(fwPolicy, exe);
+                        names = siblings.Select(r => r.name).ToList();
                     }
 
                     foreach (string name in names)
@@ -512,11 +525,22 @@ namespace AutoCommand.Services
         //   IP:  2 rules (outbound TCP + UDP) — inbound blocks are redundant on
         //        a client; unsolicited inbound is already dropped by the
         //        firewall's stateful defaults.
-        //   APP: 1 outbound rule.
+        //   APP: 1 outbound rule per install PATH. Windows Firewall matches a
+        //        program rule by exact image path (no wildcards), and binaries
+        //        move — versioned folders (EdgeWebView\Application\<ver>\),
+        //        reinstall to another drive, per-user copies. One rule per
+        //        path, all sharing the target's exe name, keeps a
+        //        name-blocked process blocked wherever it runs from:
+        //          primary:  "AC-BLOCK-APP app.exe (Out)"
+        //          siblings: "AC-BLOCK-APP app.exe (Out) · <8-hex path hash>"
         // Names are deterministic ("AC-BLOCK-IP <ip> (TCP Out)") which makes
         // creation idempotent and lets wf.msc users sort/filter by "AC-BLOCK".
         // The Description field carries full provenance (process, PID, host,
         // byte counts, UTC time) — that's the audit trail visible in wf.msc.
+        // AppBlockCoverageService keeps the path set current: it watches
+        // process creates and extends coverage when a blocked name appears at
+        // a new path, and retires rules whose path vanished (update removed
+        // the old version folder) once a live sibling exists.
 
         public const string NewIpPrefix = "AC-BLOCK-IP ";
         public const string NewAppPrefix = "AC-BLOCK-APP ";
@@ -532,6 +556,8 @@ namespace AutoCommand.Services
             public string Ip;
             public int Rules;
             public int EnabledRules;
+            public int StaleRules;     // app rules whose program file no longer exists
+            public string CoverageNote = "";  // e.g. "path gone — coverage re-pointed by AppBlockCoverageService"
             public string Description = "";
             public string Class;       // Microsoft/Azure, Akamai, Gcore, Windows component, Application, Unclassified
             public DateTime? Created;  // parsed from v2 description; null for legacy rules
@@ -626,22 +652,104 @@ namespace AutoCommand.Services
             });
         }
 
-        /// <summary>Add a 1-rule (outbound) idempotent app block with full provenance.</summary>
-        public Task<(int created, int updated)> AddAppBlockAsync(string appPath, string description)
+        // ── app-block path coverage helpers ────────────────────────────────
+
+        /// <summary>The rule name a blocked exe gets at its first (primary) path.</summary>
+        public static string PrimaryAppRuleName(string exeName) => $"{NewAppPrefix}{exeName} (Out)";
+
+        /// <summary>Sibling-rule name for an additional path of an already-name-blocked exe.</summary>
+        public static string SuffixedAppRuleName(string exeName, string appPath) =>
+            $"{PrimaryAppRuleName(exeName)} · {PathHash8(appPath)}";
+
+        private static string PathHash8(string appPath)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(
+                    (appPath ?? "").TrimEnd('\\').ToUpperInvariant()));
+                return BitConverter.ToString(hash, 0, 4).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        /// <summary>
+        /// Every v2 app-block rule covering one exe name — the primary rule plus
+        /// all " · &lt;hash&gt;" siblings — regardless of which path each points at.
+        /// </summary>
+        private static List<(string name, string app, bool enabled)> GetAppRulesForExe(
+            dynamic fwPolicy, string exeName)
+        {
+            var result = new List<(string, string, bool)>();
+            foreach (dynamic rule in fwPolicy.Rules)
+            {
+                try
+                {
+                    string name = (string)rule.Name ?? "";
+                    if (!name.StartsWith(NewAppPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                    string app = rule.ApplicationName ?? "";
+                    if (!string.Equals(System.IO.Path.GetFileName(app), exeName, StringComparison.OrdinalIgnoreCase)) continue;
+                    result.Add((name, app, (bool)rule.Enabled));
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Adds a 1-rule (outbound) app block, idempotent BY PATH, not just by
+        /// name. The firewall enforces the exact ApplicationName, so "already
+        /// blocked" is only true when THIS path is already covered — the same
+        /// exe running from a new location (versioned folder after an update,
+        /// second install root) gets a sibling rule so the name stays blocked
+        /// everywhere it lives.
+        /// </summary>
+        public Task<(int created, int updated)> AddAppBlockAsync(string appPath, string description) =>
+            AddAppBlockWithPathAsync(appPath, description).ContinueWith(
+                t => (t.Result.created, t.Result.updated),
+                TaskScheduler.Default);
+
+        /// <summary>
+        /// AddAppBlockAsync plus the name of the rule actually created or
+        /// refreshed — the audit trail callers like AppBlockCoverageService
+        /// persist needs the real rule name, primary or " · hash" sibling.
+        /// </summary>
+        public Task<(int created, int updated, string ruleName)> AddAppBlockWithPathAsync(string appPath, string description)
         {
             return Task.Run(() =>
             {
                 int created = 0, updated = 0;
+                string ruleName = null;
                 try
                 {
+                    string exe = System.IO.Path.GetFileName(appPath ?? "");
+                    if (exe.Length == 0)
+                        throw new ArgumentException("App block needs a path with a file name.", nameof(appPath));
+
                     dynamic fwPolicy = GetPolicy();
-                    string name = $"{NewAppPrefix}{System.IO.Path.GetFileName(appPath)} (Out)";
-                    dynamic existing = FindRule(fwPolicy, name);
-                    if (existing != null)
+                    List<(string name, string app, bool enabled)> mine = GetAppRulesForExe(fwPolicy, exe);
+
+                    // True duplicate — this exact path is already blocked: refresh
+                    // provenance only, never a second rule for the same image.
+                    var samePath = mine.FirstOrDefault(r =>
+                        string.Equals(r.app, appPath, StringComparison.OrdinalIgnoreCase));
+                    if (samePath.name != null)   // rule names are never null ⇒ no match
                     {
-                        try { existing.Description = description; updated++; } catch { }
-                        return (0, 1);
+                        dynamic existing = FindRule(fwPolicy, samePath.name);
+                        if (existing != null)
+                        {
+                            try { existing.Description = description; updated++; } catch { }
+                            ruleName = samePath.name;
+                        }
+                        return (0, updated, ruleName);
                     }
+
+                    string primary = PrimaryAppRuleName(exe);
+                    string name = FindRule(fwPolicy, primary) == null
+                        ? primary
+                        : SuffixedAppRuleName(exe, appPath);
+                    // Path-hash sibling collision means the same path under
+                    // different casing — treat as duplicate and leave as-is.
+                    if (FindRule(fwPolicy, name) != null) return (0, 0, name);
+
                     dynamic rule = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule"));
                     rule.Action = 0; rule.Direction = 2; rule.Enabled = true;
                     rule.InterfaceTypes = "All";
@@ -649,9 +757,10 @@ namespace AutoCommand.Services
                     rule.Description = description;
                     fwPolicy.Rules.Add(rule);
                     created = 1;
+                    ruleName = name;
                 }
                 catch (Exception ex) { throw new Exception($"Failed to add app block: {ex.Message}", ex); }
-                return (created, updated);
+                return (created, updated, ruleName);
             });
         }
 
@@ -718,6 +827,12 @@ namespace AutoCommand.Services
                     var appPaths = new HashSet<string>(
                         list.Where(t => t.kind != "ip").Select(t => t.key),
                         StringComparer.OrdinalIgnoreCase);
+                    // A pause/resume on one path row controls the whole exe
+                    // name — sibling rules cover the same process after a
+                    // version move and must not keep firing solo.
+                    var appNames = new HashSet<string>(
+                        appPaths.Select(System.IO.Path.GetFileName),
+                        StringComparer.OrdinalIgnoreCase);
 
                     dynamic fwPolicy = GetPolicy();
                     foreach (dynamic rule in fwPolicy.Rules)
@@ -736,7 +851,9 @@ namespace AutoCommand.Services
                             else
                             {
                                 string app = rule.ApplicationName ?? "";
-                                if (app.Length == 0 || !appPaths.Contains(app)) continue;
+                                if (app.Length == 0 ||
+                                    (!appPaths.Contains(app) &&
+                                     !appNames.Contains(System.IO.Path.GetFileName(app)))) continue;
                             }
 
                             matched++;
@@ -749,6 +866,66 @@ namespace AutoCommand.Services
                 }
                 catch { /* caller surfaces the zero-change result */ }
                 return (matched, changed);
+            });
+        }
+
+        /// <summary>
+        /// Retires v2 app-block rules whose program file no longer exists
+        /// (an update deleted the old version folder) — but only per target
+        /// that still has at least one LIVE path rule, so a target is never
+        /// silently unblocked by a missing file (repair-in-progress, transient
+        /// rename). The last rule of a target always survives; staleness is
+        /// surfaced by the inventory's CoverageNote instead. Returns
+        /// (targets scanned, rules retired).
+        /// </summary>
+        public Task<(int targets, int retired)> RetireDeadAppBlockRulesAsync()
+        {
+            return Task.Run(() =>
+            {
+                int targets = 0, retired = 0;
+                try
+                {
+                    dynamic fwPolicy = GetPolicy();
+                    var byExe = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                    foreach (dynamic rule in fwPolicy.Rules)
+                    {
+                        try
+                        {
+                            string name = (string)rule.Name ?? "";
+                            if (!name.StartsWith(NewAppPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                            string app = rule.ApplicationName ?? "";
+                            if (app.Length == 0) continue;
+                            string exe = System.IO.Path.GetFileName(app);
+                            if (!byExe.TryGetValue(exe, out var list)) byExe[exe] = list = new List<string>();
+                            list.Add(name);
+                        }
+                        catch { }
+                    }
+
+                    foreach (var group in byExe)
+                    {
+                        targets++;
+                        var (dead, live) = (new List<string>(), new List<string>());
+                        foreach (dynamic rule in fwPolicy.Rules)
+                        {
+                            try
+                            {
+                                if (!group.Value.Contains((string)rule.Name, StringComparer.OrdinalIgnoreCase)) continue;
+                                string app = rule.ApplicationName ?? "";
+                                if (app.Length > 0 && !System.IO.File.Exists(app)) dead.Add((string)rule.Name);
+                                else live.Add((string)rule.Name);
+                            }
+                            catch { }
+                        }
+                        if (live.Count == 0) continue;   // never the last rule of a target
+                        foreach (string name in dead)
+                        {
+                            try { fwPolicy.Rules.Remove(name); retired++; } catch { }
+                        }
+                    }
+                }
+                catch { /* sweep is best-effort; the next pass retries */ }
+                return (targets, retired);
             });
         }
 
@@ -794,6 +971,17 @@ namespace AutoCommand.Services
                                         Target = System.IO.Path.GetFileName(path),
                                         Class = IsWindowsComponent(path) ? "Windows component ⚠" : "Application",
                                     };
+                                // A rule whose image is gone (update removed the
+                                // version folder) can never match a connect —
+                                // surface it instead of letting it masquerade
+                                // as active protection.
+                                if (app.Length > 0 && !System.IO.File.Exists(app))
+                                {
+                                    t.StaleRules++;
+                                    if (string.IsNullOrEmpty(t.CoverageNote))
+                                        t.CoverageNote = "program path no longer exists on disk — rule is inert " +
+                                            "(app updated or moved); AppBlockCoverageService re-points or retires it";
+                                }
                             }
                             t.Rules++;
                             if (enabled) t.EnabledRules++;
@@ -898,9 +1086,19 @@ namespace AutoCommand.Services
                             {
                                 try
                                 {
-                                    string newName = $"{NewAppPrefix}{System.IO.Path.GetFileName(app)} (Out)";
-                                    if (FindRule(fwPolicy, newName) == null)
+                                    // Keep the legacy path covered: skip creation
+                                    // only when a v2 rule already points at THIS
+                                    // path — a primary name taken by a different
+                                    // path now means a sibling rule, not a drop.
+                                    string exe = System.IO.Path.GetFileName(app);
+                                    List<(string name, string app, bool enabled)> existing2 = GetAppRulesForExe(fwPolicy, exe);
+                                    bool covered = existing2.Any(r =>
+                                        string.Equals(r.app, app, StringComparison.OrdinalIgnoreCase));
+                                    if (!covered)
                                     {
+                                        string newName = FindRule(fwPolicy, PrimaryAppRuleName(exe)) == null
+                                            ? PrimaryAppRuleName(exe)
+                                            : SuffixedAppRuleName(exe, app);
                                         dynamic nr = Activator.CreateInstance(Type.GetTypeFromProgID("HNetCfg.FWRule"));
                                         nr.Action = 0; nr.Direction = 2; nr.Enabled = true;
                                         nr.InterfaceTypes = "All";

@@ -66,6 +66,7 @@ namespace AutoCommand.Services
         private readonly List<BlockHit> _hits = new();
         private Dictionary<string, BlockedInfo> _blockedIps = new(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> _blockedApps = new(StringComparer.OrdinalIgnoreCase);
+        private HashSet<string> _blockedAppNames = new(StringComparer.OrdinalIgnoreCase);
         private SysmonConnectWatcherService _watcher;
         private Timer _refreshTimer, _saveTimer;
         private bool _running, _dirty;
@@ -124,18 +125,27 @@ namespace AutoCommand.Services
                 var inv = await FirewallService.Instance.GetBlockedInventoryAsync();
                 var ips = new Dictionary<string, BlockedInfo>(StringComparer.OrdinalIgnoreCase);
                 var apps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var appNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var t in inv)
                 {
                     if (t.EnabledRules == 0) continue;   // fully disabled blocks never fire
                     if (t.Kind == "ip")
                         ips[t.Ip] = new BlockedInfo { Ip = t.Ip, Rules = t.Rules, EnabledRules = t.EnabledRules, Class = t.Class, Created = t.Created };
                     else if (!string.IsNullOrEmpty(t.AppPath))
+                    {
                         apps.Add(t.AppPath.ToLowerInvariant());
+                        // name-level match: a blocked exe running from a sibling
+                        // path (version move not yet re-covered) still counts
+                        // as an app-block hit, not an unexplained connect
+                        if (!string.IsNullOrEmpty(t.Target))
+                            appNames.Add(t.Target);
+                    }
                 }
                 lock (_gate)
                 {
                     _blockedIps = ips;
                     _blockedApps = apps;
+                    _blockedAppNames = appNames;
                     LastRefreshUtc = DateTime.UtcNow;
                     LastInventoryError = null;
                 }
@@ -156,6 +166,7 @@ namespace AutoCommand.Services
                 {
                     if (_blockedIps.ContainsKey(e.DestIp)) kind = "ip";
                     else if (_blockedApps.Contains(e.Image.ToLowerInvariant())) kind = "app";
+                    else if (_blockedAppNames.Contains(System.IO.Path.GetFileName(e.Image))) kind = "app";
                     else return;
                 }
                 lock (_gate)

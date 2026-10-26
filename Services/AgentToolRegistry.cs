@@ -162,6 +162,45 @@ namespace AutoCommand.Services
                 false,
                 a => DiagnoseSite(a)),
 
+            new Tool(
+                "get_phonehome_cards",
+                "The Phone Home tab's curated cards: one per well-known Windows talker (DiagTrack, " +
+                "CryptSvc, Delivery Optimization…) — the authored plain-English story, measured " +
+                "connects/hr over the last 24 h against the authored normal band, top destinations " +
+                "with classification, beacon regularity and identity corroboration. Read-only.",
+                Schema(),
+                false,
+                a => GetPhoneHomeCards()),
+
+            new Tool(
+                "list_trace_projects",
+                "The Traces tab's user-defined tracing projects (JSON files under " +
+                "%LOCALAPPDATA%\\AutoCommand\\traces\\projects): name, process/service match and " +
+                "notes for each. Read-only.",
+                Schema(),
+                false,
+                a => ListTraceProjects()),
+
+            new Tool(
+                "get_trace_project",
+                "One trace project's definition plus its measured snapshot (frequency, destinations, " +
+                "volume, beacon regularity, identity) — the same card the Traces tab renders. Read-only.",
+                Schema(("name", "Project name exactly as listed", true)),
+                false,
+                a => GetTraceProject(a)),
+
+            new Tool(
+                "run_trace",
+                "Ad-hoc trace without saving a project: measure any process (wildcards ok, e.g. " +
+                "'chrome*') or one svchost service key over the last N hours (default 24, cap 24) — " +
+                "the same metrics the Traces tab cards show. Read-only; nothing is captured, blocked " +
+                "or changed.",
+                Schema(("process", "Image name to watch ('*' wildcards)", false),
+                       ("service", "svchost SCM service key instead of a process name", false),
+                       ("hours", "Lookback hours (default 24, max 24)", false)),
+                false,
+                a => RunTrace(a)),
+
             // ── mutating: only present when the session allows, each call confirmed ──
 
             new Tool(
@@ -576,16 +615,21 @@ namespace AutoCommand.Services
             foreach (var t in inv)
             {
                 int h = t.Kind == "ip" && feedHits.TryGetValue(t.Ip, out int c) ? c : 0;
+                string note = string.IsNullOrEmpty(t.Description) ? "" :
+                    (t.Description.Length > 160 ? t.Description[..160] + "…" : t.Description);
+                if (t.StaleRules > 0)
+                    note = $"STALE ({t.StaleRules} rule path gone — {t.CoverageNote})" +
+                           (note.Length > 0 ? " · " + note : "");
                 arr.Add(new JsonObject
                 {
                     ["target"] = t.Target,
                     ["kind"] = t.Kind,
                     ["class"] = t.Class,
                     ["rules"] = $"{t.EnabledRules}/{t.Rules} enabled",
+                    ["stale_rules"] = t.StaleRules,
                     ["created"] = t.Created?.ToString("yyyy-MM-dd HH:mm") ?? "legacy",
                     [$"hits_{minutes}m"] = h,
-                    ["note"] = string.IsNullOrEmpty(t.Description) ? "" :
-                        (t.Description.Length > 160 ? t.Description[..160] + "…" : t.Description),
+                    ["note"] = note,
                 });
             }
             var feed = BlockHitFeedService.Instance;
@@ -1007,6 +1051,129 @@ namespace AutoCommand.Services
                        $" (started {proc.StartTime:yyyy-MM-dd HH:mm:ss})?";
             }
             catch { return $"Terminate PID {pid}? (process not found — it may have exited; the call will be a no-op)"; }
+        }
+
+        // ── Phone Home / Traces (read-only, backed by TraceMetricsService) ─
+
+        private static string GetPhoneHomeCards()
+        {
+            var arr = new JsonArray();
+            foreach (var key in ServiceCatalog.CuratedPhoneHomeKeys)
+            {
+                try
+                {
+                    var snap = TraceMetricsService.Compute(TraceMetricsService.Match.ForService(key));
+                    var card = SnapshotJson(snap);
+                    ServiceCatalog.TryGet(key, out var info);
+                    card.Insert(0, "service", key);
+                    if (info != null)
+                    {
+                        card["display_name"] = info.DisplayName;
+                        card["story"] = info.PhoneHomeStory ?? info.Description;
+                        card["impact_if_blocked"] = info.Impact.ToString();
+                        card["normal_max_per_hour"] = info.NormalMaxPerHour;
+                    }
+                    arr.Add(card);
+                }
+                catch (Exception ex)
+                {
+                    arr.Add(new JsonObject { ["service"] = key, ["error"] = ex.Message });
+                }
+            }
+            return ToJson(new JsonObject { ["cards"] = arr });
+        }
+
+        private static string ListTraceProjects()
+        {
+            var arr = new JsonArray();
+            foreach (var p in TraceProjectStore.Load())
+                arr.Add(new JsonObject
+                {
+                    ["name"] = p.Name,
+                    ["match_process"] = p.MatchProcess,
+                    ["service_key"] = p.ServiceKey,
+                    ["notes"] = p.Notes,
+                });
+            return ToJson(new JsonObject
+            {
+                ["projects"] = arr,
+                ["directory"] = TraceProjectStore.ProjectsDirectory,
+            });
+        }
+
+        private static string GetTraceProject(JsonObject a)
+        {
+            string name = a["name"]?.GetValue<string>() ?? "";
+            var project = TraceProjectStore.Load()
+                .FirstOrDefault(p => p.Name.Equals(name, System.StringComparison.OrdinalIgnoreCase));
+            if (project == null)
+                return $"No trace project named '{name}' — call list_trace_projects for the exact names.";
+
+            var match = string.IsNullOrWhiteSpace(project.ServiceKey)
+                ? TraceMetricsService.Match.ForProcess(project.MatchProcess)
+                : TraceMetricsService.Match.ForService(project.ServiceKey);
+            var snap = TraceMetricsService.Compute(match);
+            var o = SnapshotJson(snap);
+            o.Insert(0, "name", project.Name);
+            o["match_process"] = project.MatchProcess;
+            o["service_key"] = project.ServiceKey;
+            o["notes"] = project.Notes;
+            return ToJson(o);
+        }
+
+        private static string RunTrace(JsonObject a)
+        {
+            string process = a["process"]?.GetValue<string>();
+            string service = a["service"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(process) && string.IsNullOrWhiteSpace(service))
+                return "Give either process (image name, wildcards ok) or service (svchost SCM service key).";
+            int hours = 24;
+            if (a["hours"] != null)
+            {
+                try { hours = Math.Clamp(a["hours"].GetValue<int>(), 1, 24); } catch { }
+            }
+            var match = string.IsNullOrWhiteSpace(service)
+                ? TraceMetricsService.Match.ForProcess(process)
+                : TraceMetricsService.Match.ForService(service);
+            var snap = TraceMetricsService.Compute(match, hours);
+            var o = SnapshotJson(snap);
+            o.Insert(0, "match", match.Describe());
+            o["window_hours"] = hours;
+            return ToJson(o);
+        }
+
+        private static JsonObject SnapshotJson(TraceMetricsService.Snapshot snap)
+        {
+            var dests = new JsonArray();
+            foreach (var d in snap.Destinations)
+                dests.Add(new JsonObject
+                {
+                    ["ip"] = d.Ip, ["port"] = d.Port, ["connects"] = d.Count,
+                    ["classification"] = d.Classification,
+                });
+            var live = new JsonArray();
+            foreach (var c in snap.Live)
+                live.Add(new JsonObject
+                {
+                    ["pid"] = c.Pid, ["remote"] = c.Remote, ["classification"] = c.Classification,
+                });
+            return new JsonObject
+            {
+                ["connects_per_hour"] = snap.ConnectsPerHour,
+                ["connects_24h"] = snap.ConnectsLast24H,
+                ["connects_last_1h"] = snap.ConnectsLast1H,
+                ["spawns_24h"] = snap.SpawnsLast24H,
+                ["live_connections"] = snap.LiveConnectionCount,
+                ["destinations"] = dests,
+                ["live"] = live,
+                ["beacon"] = snap.BeaconVerdict == null ? null
+                    : snap.BeaconVerdict + " — " + snap.BeaconDetail,
+                ["tls_tx_bytes_24h"] = snap.BytesAttributable ? snap.TxBytes24H : null,
+                ["tls_rx_bytes_24h"] = snap.BytesAttributable ? snap.RxBytes24H : null,
+                ["identity"] = snap.IdentityNote,
+                ["verdict"] = snap.VerdictText,
+                ["note"] = snap.ArchiveNote,
+            };
         }
 
         private static string ToJson(JsonObject o) => o.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });

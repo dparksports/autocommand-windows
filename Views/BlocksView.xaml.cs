@@ -15,9 +15,12 @@ namespace AutoCommand.Views
         public BlockRecord Record;
         public bool HasRules;
         public bool RulesEnabled;      // any enabled rule → on
-        public string StatusGlyph => !HasRules ? "⚠" : RulesEnabled ? "⛔" : "⏸";
+        public bool RulesStale;        // rule(s) point at a path that no longer exists on disk
+        public string StatusGlyph => !HasRules ? "⚠" : RulesStale ? "🕳" : RulesEnabled ? "⛔" : "⏸";
         public string StatusToolTip => !HasRules
             ? "No firewall rules found for this target (removed elsewhere, or created by an older tool)"
+            : RulesStale
+            ? "Stale — the rule's program path no longer exists (app updated or moved). It cannot block anything until coverage is re-pointed; AppBlockCoverageService extends it when the process reappears and retires the dead rule."
             : RulesEnabled ? "Active — outbound traffic to this target is blocked"
             : "Paused — rules exist but are disabled; traffic flows";
 
@@ -194,6 +197,7 @@ namespace AutoCommand.Views
                         Record = r,
                         HasRules = rules > 0,
                         RulesEnabled = enabled > 0,
+                        RulesStale = (t?.StaleRules ?? 0) > 0,
                         ClassBrush = BrushForClass(r),
                         LastTrafficBrush = (Brush)FindResource("TextSecondaryBrush"),
                     });
