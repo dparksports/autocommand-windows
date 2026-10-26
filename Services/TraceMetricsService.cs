@@ -54,10 +54,19 @@ namespace AutoCommand.Services
 
         public sealed class DestSummary
         {
-            public string Ip;
-            public int Port;
-            public int Count;
-            public string Classification;
+            public string Ip { get; set; }
+            public int Port { get; set; }
+            public int Count { get; set; }
+            public string Classification { get; set; }
+            public string Display => $"{Ip}:{Port} ×{Count} [{Classification}]";
+        }
+
+        /// <summary>One bar of the 24-hour histogram shown in the detail
+        /// pane. Height is pre-normalized (px) so XAML needs no converter.</summary>
+        public sealed class BarVM
+        {
+            public double Height { get; set; }
+            public string Label { get; set; }
         }
 
         public sealed class LiveConnection
@@ -117,6 +126,13 @@ namespace AutoCommand.Services
             public bool CanQuiet { get; set; }                   // DiagTrack-style hosts pin offered
             public bool IsQuieted { get; set; }                  // pin currently active
             public List<string> TopDestIps { get; set; } = new();// for destination blocks
+
+            // ── master-detail extras: compact row (left) + detail pane (right) ─
+            public double ConnectsPerHour { get; set; }
+            public bool BeaconRegular { get; set; }
+            public string RowMetrics { get; set; }
+            public List<BarVM> Bars { get; set; } = new();
+            public List<DestSummary> Destinations { get; set; } = new();
         }
 
         public static Snapshot Compute(Match what, int hours = 24)
@@ -652,6 +668,20 @@ namespace AutoCommand.Services
             };
             vm.Footnote = snap.ArchiveNote ?? "";
             vm.TopDestIps = snap.Destinations.Select(d => d.Ip).Take(3).ToList();
+
+            // master-detail extras
+            vm.ConnectsPerHour = snap.ConnectsPerHour;
+            vm.BeaconRegular = snap.BeaconVerdict != null;
+            vm.RowMetrics = $"{snap.ConnectsPerHour}/hr · {snap.ConnectsLast24H} in 24h · {snap.LiveConnectionCount} live";
+            vm.Destinations = snap.Destinations;
+            int maxBucket = snap.HourlyBuckets.Count > 0 ? snap.HourlyBuckets.Max() : 0;
+            vm.Bars = snap.HourlyBuckets
+                .Select((b, i) => new BarVM
+                {
+                    Height = b == 0 ? 1 : 2 + 34.0 * b / maxBucket,
+                    Label = $"{23 - i}h ago · {b} connect(s)",
+                })
+                .ToList();
             return vm;
         }
 

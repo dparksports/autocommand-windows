@@ -20,6 +20,29 @@ namespace AutoCommand.Views
             throw new NotSupportedException();
     }
 
+    /// <summary>null → Collapsed; pass "inverse" to flip (null → Visible).</summary>
+    public sealed class NullToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            bool isNull = value == null;
+            bool inverse = string.Equals(parameter as string, "inverse", StringComparison.OrdinalIgnoreCase);
+            bool visible = inverse ? isNull : !isNull;
+            return visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>count == 0 → Visible (the "nothing here" hint case).</summary>
+    public sealed class CountToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture) =>
+            value is 0 ? Visibility.Visible : Visibility.Collapsed;
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotSupportedException();
+    }
+
     /// <summary>
     /// "What are Windows' own services doing on the network?" — one card per
     /// curated talker (DiagTrack, CryptSvc, Delivery Optimization…): the
@@ -66,24 +89,19 @@ namespace AutoCommand.Views
                     }
                     catch { /* one bad card must not take the tab down */ }
                 }
-                vms.Sort((a, b) => ParseRate(b.MetricsLine).CompareTo(ParseRate(a.MetricsLine)));
+                vms.Sort((a, b) => b.ConnectsPerHour.CompareTo(a.ConnectsPerHour));
                 Dispatcher.BeginInvoke(() =>
                 {
-                    Cards.ItemsSource = vms;
-                    StatusText.Text = $"Updated {DateTime.Now:HH:mm:ss} · cards re-sorted by measured connects/hr · refresh 60 s";
+                    // keep the user's selection stable across refreshes —
+                    // same service, same row, even as sorting reorders them
+                    var selectedKey = (RowList.SelectedItem as TraceMetricsService.TraceCardVM)?.ServiceKey;
+                    RowList.ItemsSource = vms;
+                    var restore = vms.FirstOrDefault(v => v.ServiceKey == selectedKey) ?? vms.FirstOrDefault();
+                    if (restore != null) RowList.SelectedItem = restore;
+                    StatusText.Text = $"Updated {DateTime.Now:HH:mm:ss} · rows sorted by measured connects/hr · refresh 60 s";
                     _refreshing = false;
                 });
             });
-        }
-
-        private static double ParseRate(string metricsLine)
-        {
-            var ix = metricsLine.IndexOf(" connects/hr", StringComparison.Ordinal);
-            if (ix <= 0) return 0;
-            var head = metricsLine[..ix];
-            int start = head.Length - 1;
-            while (start >= 0 && (char.IsDigit(head[start]) || head[start] == '.' || head[start] == ',')) start--;
-            return double.TryParse(head[(start + 1)..], out var v) ? v : 0;
         }
 
         // ── suppression ──────────────────────────────────────────────────
@@ -183,6 +201,60 @@ namespace AutoCommand.Views
                 created > 0 ? $"Blocked {created} destination(s) for {vm.Title}. Undo from the Blocks tab."
                             : "Rules already existed for all listed destinations — nothing new created.",
                 "Block destinations", MessageBoxButton.OK, MessageBoxImage.Information);
+            Refresh();
+        }
+
+        /// <summary>Blocks one destination IP of the selected service — the
+        /// per-row action next to each destination in the detail pane.</summary>
+        private async void BlockOneBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button btn || string.IsNullOrEmpty(btn.Tag as string)) return;
+            if (RowList.SelectedItem is not TraceMetricsService.TraceCardVM vm) return;
+            string ip = (string)btn.Tag;
+
+            ServiceCatalog.TryGet(vm.ServiceKey, out var info);
+            bool risky = info is { Impact: ServiceImpact.High or ServiceImpact.Medium };
+            string warning = risky
+                ? $"{vm.Title} is catalogued as {info.Impact.ToString().ToUpper()} impact: {info.Description}"
+                : IpClassifier.WarningText(ip);
+            var win = new BlockConfirmWindow(
+                $"Block {ip}",
+                warning,
+                $"Outbound firewall rules for {ip} — a measured destination of {vm.Title} ({vm.ServiceKey}).\n" +
+                "Undo from the Blocks tab.",
+                "phonehome-dest", "Phone Home destination blocks")
+            {
+                Owner = Window.GetWindow(this)
+            };
+            if (win.ShowDialog() != true) return;
+            if (win.Suppress) ConfirmPrefs.Suppress("phonehome-dest");
+
+            try
+            {
+                var (made, _) = await FirewallService.Instance.AddIpBlockAsync(ip,
+                    $"[blocked {DateTime.UtcNow:yyyy-MM-dd HH:mm} UTC] {vm.Title} ({vm.ServiceKey}) " +
+                    $"destination from Phone Home · AutoCommand Phone Home");
+                if (made > 0)
+                    BlocksStore.AddOrUpdate(new BlockRecord
+                    {
+                        Kind = "ip",
+                        Key = ip,
+                        ProcessName = "svchost.exe",
+                        ServiceKey = vm.ServiceKey ?? "",
+                        SvcDisplayName = vm.Title,
+                        ClassAtBlock = IpClassifier.Classify(ip),
+                        Attrib = "live",
+                    }, "phone-home");
+                MessageBox.Show(made > 0
+                        ? $"Blocked {ip} for {vm.Title}. Undo from the Blocks tab."
+                        : "A block for that destination already existed.",
+                    "Block destination", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Block failed: " + ex.Message, "Block destination",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
             Refresh();
         }
     }
