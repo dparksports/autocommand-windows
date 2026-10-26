@@ -137,7 +137,7 @@ namespace AutoCommand.Views
 
             CheckSysmonStatus();
 
-            _dnsService   = new DnsResolutionService();
+            _dnsService   = DnsResolutionService.Instance;
             _sysmonService = new SysmonWatcherService(_trackedIps, _dnsService);
             _sysmonService.MonitorAllProcesses = true;
             _sysmonService.FilterKnownCloudIps = HideCloudCheck.IsChecked == true;

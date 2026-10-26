@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
@@ -18,24 +19,63 @@ namespace AutoCommand.Services
     ///   • An in-memory LRU/TTL layer for fast repeated lookups
     ///   • Rate-limited queue so we never spam any API
     ///   • Live update of SvchostMonitorItem.Hostname via INotifyPropertyChanged
+    ///
+    /// SINGLETON — every tab and watcher shares DnsResolutionService.Instance.
+    /// Four separate instances once meant four in-memory caches (duplicate
+    /// lookups for the same IP), four independent 1400ms throttles (4x the
+    /// ip-api.com free-tier limit, so answers came back rate-limited), and
+    /// four writers clobbering the same dns_cache.json (last save wins, so a
+    /// restart re-resolved everything and re-hit the API).
+    ///
+    /// The geo-IP fallback is cached BY /24 PREFIX, not per address: the
+    /// org/country answer is constant across an operator's whole address
+    /// block, and DNS-rotating fleets (Azure, Google, Akamai) present
+    /// hundreds of distinct addresses from a handful of blocks. Locally
+    /// classified ranges (IpClassifier: Microsoft/Azure, Akamai, Gcore) and
+    /// non-routable addresses (RFC1918, loopback, link-local) never touch
+    /// the API at all. Transient API failures back off instead of caching
+    /// a wrong "unresolved" answer for the TTL.
     /// </summary>
     public sealed class DnsResolutionService : IDisposable
     {
+        public static DnsResolutionService Instance => _instance ??= new DnsResolutionService();
+        private static DnsResolutionService _instance;
+
+        private DnsResolutionService()
+        {
+            LoadCacheFromDisk();
+            LoadForwardCacheFromDisk();
+            LoadGeoCacheFromDisk();
+        }
+
         // -----------------------------------------------------------------------
         // Constants
         // -----------------------------------------------------------------------
 
         private static readonly TimeSpan DnsCacheTtl   = TimeSpan.FromHours(24);
-        private static readonly TimeSpan GeoCacheTtl   = TimeSpan.FromHours(24);
+
+        /// <summary>Geo org/country per /24 prefix — ownership changes rarely.</summary>
+        private static readonly TimeSpan GeoCacheTtl   = TimeSpan.FromDays(14);
+
+        /// <summary>A definitive "no org data" answer — retry the prefix next day.</summary>
+        private static readonly TimeSpan GeoNegativeTtl = TimeSpan.FromHours(24);
 
         /// <summary>Minimum delay between successive ip-api.com calls (45 req/min free tier).</summary>
         private static readonly TimeSpan GeoApiThrottle = TimeSpan.FromMilliseconds(1_400);
+
+        /// <summary>Cap for the transient-failure backoff doubling.</summary>
+        private static readonly TimeSpan GeoBackoffMax = TimeSpan.FromMinutes(5);
+
+        private static readonly TimeSpan SaveInterval = TimeSpan.FromSeconds(60);
 
         private static readonly string CacheFilePath =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dns_cache.json");
 
         private static readonly string ForwardCacheFilePath =
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dns_forward_cache.json");
+
+        private static readonly string GeoCacheFilePath =
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "geo_prefix_cache.json");
 
         /// <summary>Forward (hostname→IPs) entries are short-lived: CDN names rotate.</summary>
         private static readonly TimeSpan ForwardCacheTtl = TimeSpan.FromMinutes(60);
@@ -47,6 +87,9 @@ namespace AutoCommand.Services
 
         // ip → (hostname, resolvedAt)
         private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
+
+        // "a.b.c.0/24" (IPv4; full address for IPv6) → (org·code, resolvedAt, negative)
+        private readonly ConcurrentDictionary<string, GeoCacheEntry> _geoCache = new();
 
         // hostname → (ips, resolvedAt) — the BITS tab's "where do they connect"
         private readonly ConcurrentDictionary<string, ForwardCacheEntry> _forwardCache = new();
@@ -64,23 +107,29 @@ namespace AutoCommand.Services
 
         private readonly CancellationTokenSource _cts = new();
         private Task _workerTask;
+        private Timer _saveTimer;
+        private int _started;
 
         private DateTime _lastGeoCall = DateTime.MinValue;
+
+        /// <summary>Grows on transient ip-api failures (rate limit, timeouts), resets on success.</summary>
+        private TimeSpan _geoBackoff = GeoApiThrottle;
 
         // -----------------------------------------------------------------------
         // Public API
         // -----------------------------------------------------------------------
 
-        public DnsResolutionService()
-        {
-            LoadCacheFromDisk();
-            LoadForwardCacheFromDisk();
-        }
-
-        /// <summary>Starts the background resolution worker.</summary>
+        /// <summary>
+        /// Starts the background resolution worker. Idempotent — every consumer
+        /// (Svchost monitor, Traffic Patterns, BITS) may call it on the shared
+        /// instance; only the first spawns the single reader.
+        /// </summary>
         public void Start()
         {
+            if (Interlocked.Exchange(ref _started, 1) == 1) return;
             _workerTask = Task.Run(() => WorkerLoopAsync(_cts.Token));
+            _saveTimer = new Timer(_ => { SaveCacheToDisk(); SaveGeoCacheToDisk(); }, null,
+                SaveInterval, SaveInterval);
         }
 
         /// <summary>
@@ -129,11 +178,14 @@ namespace AutoCommand.Services
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _started, 2) == 2) return;   // already disposed
             _cts.Cancel();
             _queue.Writer.TryComplete();
             _workerTask?.Wait(TimeSpan.FromSeconds(3));
+            _saveTimer?.Dispose(); _saveTimer = null;
             SaveCacheToDisk();
             SaveForwardCacheToDisk();
+            SaveGeoCacheToDisk();
             _cts.Dispose();
         }
 
@@ -204,7 +256,7 @@ namespace AutoCommand.Services
                 var dict = new Dictionary<string, PersistedForwardEntry>(_forwardCache.Count);
                 foreach (var kv in _forwardCache)
                     dict[kv.Key] = new PersistedForwardEntry { I = kv.Value.Ips, T = kv.Value.ResolvedAt };
-                File.WriteAllText(ForwardCacheFilePath,
+                AtomicWriteJson(ForwardCacheFilePath,
                     JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false }));
             }
             catch { /* disk full, permissions — silently skip */ }
@@ -246,18 +298,32 @@ namespace AutoCommand.Services
             // 2. Reverse DNS
             string resolved = await ReversesDnsAsync(ip);
 
-            // 3. If DNS only gave us the raw IP, try geo-IP (rate-limited)
+            // 3. If DNS only gave us the raw IP, try geo-IP (local ranges and
+            //    prefix cache first; the API only for genuinely new blocks)
             if (resolved == ip || IsUnresolvedHostname(resolved))
             {
-                string geoLabel = await GeoIpLookupAsync(ip, ct);
-                if (!string.IsNullOrEmpty(geoLabel))
-                    resolved = geoLabel;
+                var geo = await GeoIpLookupAsync(ip, ct);
+                if (geo.Kind == GeoResultKind.Label && !string.IsNullOrEmpty(geo.Label))
+                {
+                    resolved = geo.Label;
+                }
+                else if (geo.Kind == GeoResultKind.Transient)
+                {
+                    // Rate limit / transport failure: no API answer existed, so
+                    // caching the raw IP would poison this address for 24h.
+                    // Leave it unresolved — the monitor's re-enqueue tick (or a
+                    // later session) retries once the backoff window clears.
+                    return ip;
+                }
+                // Negative (definitive no-data) falls through and caches the
+                // raw IP as before: the prefix cache already stops API trips.
             }
 
             // 4. Store in cache (even failed lookups, so we don't retry immediately)
             _cache[ip] = new CacheEntry(resolved, DateTime.UtcNow);
 
-            // 5. Periodically persist to disk (every 20 resolutions)
+            // 5. Periodically persist to disk (every 20 resolutions; a 60s
+            //    timer is the other checkpoint)
             if (_cache.Count % 20 == 0)
                 SaveCacheToDisk();
 
@@ -277,28 +343,69 @@ namespace AutoCommand.Services
             }
         }
 
-        private async Task<string> GeoIpLookupAsync(string ip, CancellationToken ct)
+        private enum GeoResultKind { Label, Negative, Transient }
+
+        private readonly struct GeoResult
         {
-            // Enforce throttle between successive API calls
-            var elapsed = DateTime.UtcNow - _lastGeoCall;
-            if (elapsed < GeoApiThrottle)
+            public readonly GeoResultKind Kind;
+            public readonly string Label;
+            private GeoResult(GeoResultKind kind, string label) { Kind = kind; Label = label; }
+            public static GeoResult Ok(string label) => new(GeoResultKind.Label, label);
+            public static readonly GeoResult NoData = new(GeoResultKind.Negative, null);
+            public static readonly GeoResult RetryLater = new(GeoResultKind.Transient, null);
+        }
+
+        /// <summary>
+        /// Geo/owner label for an IP, cheapest source first:
+        ///   1. locally classified ranges (IpClassifier) — no network at all;
+        ///   2. non-routable addresses (RFC1918, loopback, link-local…) — no
+        ///      answer exists, so no trip either;
+        ///   3. the /24-prefix cache — one API answer serves a whole rotating
+        ///      fleet block for two weeks;
+        ///   4. ip-api.com, throttled, with backoff on transient failures.
+        /// Transient failures (rate limit, timeout) return RetryLater and cache
+        /// NOTHING — a wrong "unresolved" answer must not outlive the outage.
+        /// </summary>
+        private async Task<GeoResult> GeoIpLookupAsync(string ip, CancellationToken ct)
+        {
+            // 1–2. Local answers cost nothing and are always in stock.
+            if (!IsGloballyRoutable(ip)) return GeoResult.NoData;
+            string local = IpClassifier.Classify(ip);
+            if (local != "Unclassified" && local != "IPv6/other")
+                return GeoResult.Ok(local);
+
+            // 3. Prefix cache (positive and negative both stop API trips)
+            string prefix = GeoPrefixKey(ip);
+            if (_geoCache.TryGetValue(prefix, out var cached))
             {
-                var wait = GeoApiThrottle - elapsed;
-                await Task.Delay(wait, ct);
+                TimeSpan ttl = cached.Negative ? GeoNegativeTtl : GeoCacheTtl;
+                if (!cached.IsStale(ttl))
+                    return cached.Negative ? GeoResult.NoData : GeoResult.Ok(cached.Label);
             }
 
+            // 4. The API. Spacing uses the current backoff so a rate-limiting
+            //    episode widens the gap instead of compounding the 429s.
+            var elapsed = DateTime.UtcNow - _lastGeoCall;
+            if (elapsed < _geoBackoff)
+                await Task.Delay(_geoBackoff - elapsed, ct);
             _lastGeoCall = DateTime.UtcNow;
 
             try
             {
-                string url = $"http://ip-api.com/json/{Uri.EscapeDataString(ip)}?fields=status,org,countryCode";
+                string url = $"http://ip-api.com/json/{Uri.EscapeDataString(ip)}?fields=status,message,org,countryCode";
                 string json = await _http.GetStringAsync(url, ct);
 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
                 if (!root.TryGetProperty("status", out var status) || status.GetString() != "success")
-                    return string.Empty;
+                {
+                    // A well-formed "fail" (invalid query, reserved range the
+                    // local check didn't cover) is a definitive answer.
+                    _geoBackoff = GeoApiThrottle;
+                    _geoCache[prefix] = new GeoCacheEntry("", DateTime.UtcNow, negative: true);
+                    return GeoResult.NoData;
+                }
 
                 string org  = root.TryGetProperty("org",         out var o) ? o.GetString() ?? "" : "";
                 string code = root.TryGetProperty("countryCode", out var c) ? c.GetString() ?? "" : "";
@@ -310,10 +417,46 @@ namespace AutoCommand.Services
                     if (space > 0) org = org[(space + 1)..];
                 }
 
-                return string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
+                string label = string.IsNullOrEmpty(code) ? org : $"{org} · {code}";
+                _geoBackoff = GeoApiThrottle;
+                _geoCache[prefix] = new GeoCacheEntry(
+                    string.IsNullOrEmpty(label) ? "" : label, DateTime.UtcNow,
+                    negative: string.IsNullOrEmpty(label));
+                return string.IsNullOrEmpty(label) ? GeoResult.NoData : GeoResult.Ok(label);
             }
             catch (OperationCanceledException) { throw; }
-            catch { return string.Empty; }
+            catch
+            {
+                // HTTP 429 / timeout / unparseable body — transient: back off
+                // (doubling, capped) and let the caller retry later.
+                _geoBackoff = _geoBackoff >= GeoBackoffMax ? GeoBackoffMax : TimeSpan.FromTicks(Math.Min(_geoBackoff.Ticks * 2, GeoBackoffMax.Ticks));
+                return GeoResult.RetryLater;
+            }
+        }
+
+        /// <summary>/24 network for IPv4 ("a.b.c.0/24"); IPv6 keeps its full address as key.</summary>
+        internal static string GeoPrefixKey(string ip)
+        {
+            if (IPAddress.TryParse(ip, out var a) && a.AddressFamily == AddressFamily.InterNetwork)
+            {
+                var b = a.GetAddressBytes();
+                return $"{b[0]}.{b[1]}.{b[2]}.0/24";
+            }
+            return ip;
+        }
+
+        /// <summary>False for addresses that can never have a geo answer — never spend an API call on them.</summary>
+        internal static bool IsGloballyRoutable(string ip)
+        {
+            if (!IPAddress.TryParse(ip, out var a) || a.AddressFamily != AddressFamily.InterNetwork)
+                return true;   // IPv6 etc. — don't gate here
+            var b = a.GetAddressBytes();
+            if (b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224) return false;   // this-net, private, loopback, multicast+
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return false;                 // RFC1918
+            if (b[0] == 192 && b[1] == 168) return false;                              // RFC1918
+            if (b[0] == 169 && b[1] == 254) return false;                              // link-local
+            if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return false;                // CGNAT
+            return true;
         }
 
         // -----------------------------------------------------------------------
@@ -349,10 +492,50 @@ namespace AutoCommand.Services
                 foreach (var kv in _cache)
                     dict[kv.Key] = new PersistedEntry { H = kv.Value.Hostname, T = kv.Value.ResolvedAt };
 
-                string json = JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false });
-                File.WriteAllText(CacheFilePath, json);
+                AtomicWriteJson(CacheFilePath, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false }));
             }
             catch { /* disk full, permissions, etc. — silently skip */ }
+        }
+
+        // ── geo prefix cache persistence (same pattern, its own file) ─────
+
+        private void LoadGeoCacheFromDisk()
+        {
+            try
+            {
+                if (!File.Exists(GeoCacheFilePath)) return;
+                var dict = JsonSerializer.Deserialize<Dictionary<string, PersistedGeoEntry>>(
+                    File.ReadAllText(GeoCacheFilePath));
+                if (dict == null) return;
+                foreach (var kv in dict)
+                {
+                    var entry = new GeoCacheEntry(kv.Value.L ?? "", kv.Value.T, kv.Value.N);
+                    if (!entry.IsStale(entry.Negative ? GeoNegativeTtl : GeoCacheTtl))
+                        _geoCache[kv.Key] = entry;
+                }
+            }
+            catch { /* corrupt or missing file — start fresh */ }
+        }
+
+        private void SaveGeoCacheToDisk()
+        {
+            try
+            {
+                var dict = new Dictionary<string, PersistedGeoEntry>(_geoCache.Count);
+                foreach (var kv in _geoCache)
+                    dict[kv.Key] = new PersistedGeoEntry { L = kv.Value.Label, T = kv.Value.ResolvedAt, N = kv.Value.Negative };
+                AtomicWriteJson(GeoCacheFilePath, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false }));
+            }
+            catch { /* best effort */ }
+        }
+
+        /// <summary>Write-via-temp-then-replace: a crash mid-save can never truncate the cache.</summary>
+        private static void AtomicWriteJson(string path, string json)
+        {
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, json);
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
 
         // -----------------------------------------------------------------------
@@ -393,6 +576,28 @@ namespace AutoCommand.Services
         {
             public string   H { get; set; } // hostname
             public DateTime T { get; set; } // resolved-at (UTC)
+        }
+
+        /// <summary>One org·country answer for a whole /24 block (or one IPv6 address).</summary>
+        private sealed class GeoCacheEntry
+        {
+            public string   Label      { get; }   // "Microsoft Corporation · US"
+            public DateTime ResolvedAt { get; }
+            public bool     Negative   { get; }   // definitive no-data — shorter TTL
+
+            public GeoCacheEntry(string label, DateTime resolvedAt, bool negative)
+            {
+                Label = label; ResolvedAt = resolvedAt; Negative = negative;
+            }
+
+            public bool IsStale(TimeSpan ttl) => (DateTime.UtcNow - ResolvedAt) > ttl;
+        }
+
+        private sealed class PersistedGeoEntry
+        {
+            public string   L { get; set; } // label ("" for negative entries)
+            public DateTime T { get; set; } // resolved-at (UTC)
+            public bool     N { get; set; } // negative?
         }
 
         private sealed class ForwardCacheEntry

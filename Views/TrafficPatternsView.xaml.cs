@@ -68,7 +68,7 @@ namespace AutoCommand.Views
             {
                 _initialized = true;
 
-                _dnsService = new DnsResolutionService();
+                _dnsService = DnsResolutionService.Instance;
                 _dnsService.Start();
 
                 _connectWatcher = new SysmonConnectWatcherService();
@@ -83,8 +83,8 @@ namespace AutoCommand.Views
             TcpStreamCaptureService.Shared.AddRef();
             _captureRunning = true;
 
-            // DnsResolutionService.Start is one-shot (single reader channel);
-            // it was started in the init block above.
+            // Shared singleton — Start is idempotent (single reader channel);
+            // first consumer to load spawns the worker, the rest just share it.
             if (LiveCheck.IsChecked == true) _liveTimer.Start();
             RefreshGrid();
         }

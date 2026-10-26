@@ -179,7 +179,7 @@ namespace AutoCommand.Services
                 OnError?.Invoke($"BITS activity feed unavailable: {ex.Message}");
             }
 
-            _dns = new DnsResolutionService();
+            _dns = DnsResolutionService.Instance;
             _dns.Start();
 
             _comTimer = new Timer(_ => PollCom(), null, TimeSpan.Zero, TimeSpan.FromSeconds(2));
@@ -195,7 +195,8 @@ namespace AutoCommand.Services
             _comTimer = null;
             _statsTimer?.Dispose();
             _statsTimer = null;
-            _dns?.Dispose();
+            // The DNS service is the shared singleton — never disposed here;
+            // stopping the BITS tab must not kill resolution for other tabs.
             _dns = null;
             PersistStatsIfDirty();
         }
