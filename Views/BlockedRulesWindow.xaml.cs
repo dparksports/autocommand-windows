@@ -204,7 +204,7 @@ namespace AutoCommand.Views
                 foreach (var r in targets)
                 {
                     var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var entry = await Services.RdapService.Instance.LookupAsync(r.Ip);
+                    var entry = await Services.RdapService.Instance.LookupAsync(r.Ip, urgent: true);
                     sw.Stop();
                     if (sw.ElapsedMilliseconds < 50) cached++;
                     if (entry.IsNegative) failed++;
