@@ -1,5 +1,7 @@
 # AutoCommand — see what your Windows PC is really doing
 
+> **🚚 AutoCommand has moved.** This repository is frozen at v2026.10.25.4 — development, releases, and support now live at **[dparksports/autocommand-ii](https://github.com/dparksports/autocommand-ii/releases/latest)**. Same app, same one-step install, and your existing blocks, undo ledger, and caches carry over automatically. Please open issues and discussions in the new repo.
+
 ![AutoCommand](Assets/corp_banner.png?v=light1)
 
 **Tired of antivirus software? Nagging popups, yearly subscriptions, scans that finish with "no threats found" — and still no answer when your computer acts weird?**
